@@ -1,97 +1,105 @@
-import { type CustomField } from "@prisma/client";
+import type { Category, Prisma } from "@prisma/client";
 import { json } from "@remix-run/node";
 import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/node";
 import { Link, useLoaderData } from "@remix-run/react";
 import { ActionsDropdown } from "~/components/custom-fields/actions-dropdown";
-import { ErrorBoundryComponent } from "~/components/errors";
+import BulkActionsDropdown from "~/components/custom-fields/bulk-actions-dropdown";
 import type { HeaderData } from "~/components/layout/header/types";
 import { List } from "~/components/list";
-import { Badge } from "~/components/shared";
-import { ControlledActionButton } from "~/components/shared/controlled-action-button";
+import { Badge } from "~/components/shared/badge";
+import { Button } from "~/components/shared/button";
 import { Td, Th } from "~/components/table";
 import {
-  countAcviteCustomFields,
+  countActiveCustomFields,
   getFilteredAndPaginatedCustomFields,
-} from "~/modules/custom-field";
-import { getOrganizationTierLimit } from "~/modules/tier";
+} from "~/modules/custom-field/service.server";
+import { getOrganizationTierLimit } from "~/modules/tier/service.server";
 
-import {
-  getCurrentSearchParams,
-  getParamsValues,
-  generatePageMeta,
-} from "~/utils";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
-import { updateCookieWithPerPage, userPrefs } from "~/utils/cookies.server";
+import {
+  setCookie,
+  updateCookieWithPerPage,
+  userPrefs,
+} from "~/utils/cookies.server";
 import { FIELD_TYPE_NAME } from "~/utils/custom-fields";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
-import { requirePermision } from "~/utils/roles.server";
-import { canCreateMoreCustomFields } from "~/utils/subscription";
+import { makeShelfError } from "~/utils/error";
+import { data, error, getCurrentSearchParams } from "~/utils/http.server";
+import { getParamsValues } from "~/utils/list";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.data";
+import { requirePermission } from "~/utils/roles.server";
+import { canCreateMoreCustomFields } from "~/utils/subscription.server";
+import { tw } from "~/utils/tw";
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => [
   { title: data ? appendToMetaTitle(data.header.title) : "" },
 ];
 
-export const ErrorBoundary = () => <ErrorBoundryComponent />;
+export async function loader({ context, request }: LoaderFunctionArgs) {
+  const authSession = context.getSession();
+  const { userId } = authSession;
 
-export async function loader({ request }: LoaderFunctionArgs) {
-  const { organizationId, organizations } = await requirePermision(
-    request,
-    PermissionEntity.customField,
-    PermissionAction.read
-  );
-
-  const searchParams = getCurrentSearchParams(request);
-  const { page, perPageParam, search } = getParamsValues(searchParams);
-  const cookie = await updateCookieWithPerPage(request, perPageParam);
-  const { perPage } = cookie;
-  const { prev, next } = generatePageMeta(request);
-
-  const { customFields, totalCustomFields } =
-    await getFilteredAndPaginatedCustomFields({
-      organizationId,
-      page,
-      perPage,
-      search,
+  try {
+    const { organizationId, organizations } = await requirePermission({
+      userId,
+      request,
+      entity: PermissionEntity.customField,
+      action: PermissionAction.read,
     });
 
-  const tierLimit = await getOrganizationTierLimit({
-    organizationId,
-    organizations,
-  });
+    const searchParams = getCurrentSearchParams(request);
+    const { page, perPageParam, search } = getParamsValues(searchParams);
+    const cookie = await updateCookieWithPerPage(request, perPageParam);
+    const { perPage } = cookie;
 
-  const totalPages = Math.ceil(totalCustomFields / perPageParam);
+    const { customFields, totalCustomFields } =
+      await getFilteredAndPaginatedCustomFields({
+        organizationId,
+        page,
+        perPage,
+        search,
+      });
 
-  const header: HeaderData = {
-    title: "Custom Fields",
-  };
-  const modelName = {
-    singular: "custom fields",
-    plural: "custom Fields",
-  };
+    const tierLimit = await getOrganizationTierLimit({
+      organizationId,
+      organizations,
+    });
 
-  return json(
-    {
-      header,
-      items: customFields,
-      search,
-      page,
-      totalItems: totalCustomFields,
-      totalPages,
-      perPage,
-      prev,
-      next,
-      modelName,
-      canCreateMoreCustomFields: canCreateMoreCustomFields({
-        tierLimit,
-        totalCustomFields: await countAcviteCustomFields({ organizationId }),
+    const totalPages = Math.ceil(totalCustomFields / perPageParam);
+
+    const header: HeaderData = {
+      title: "Custom Fields",
+    };
+    const modelName = {
+      singular: "custom fields",
+      plural: "custom Fields",
+    };
+
+    return json(
+      data({
+        header,
+        items: customFields,
+        search,
+        page,
+        totalItems: totalCustomFields,
+        totalPages,
+        perPage,
+        modelName,
+        canCreateMoreCustomFields: canCreateMoreCustomFields({
+          tierLimit,
+          totalCustomFields: await countActiveCustomFields({ organizationId }),
+        }),
       }),
-    },
-    {
-      headers: {
-        "Set-Cookie": await userPrefs.serialize(cookie),
-      },
-    }
-  );
+      {
+        headers: [setCookie(await userPrefs.serialize(cookie))],
+      }
+    );
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId });
+    throw json(error(reason), { status: reason.status });
+  }
 }
 
 export default function CustomFieldsIndexPage() {
@@ -100,27 +108,30 @@ export default function CustomFieldsIndexPage() {
     <>
       <div className="mb-2.5 flex items-center justify-between bg-white md:rounded md:border md:border-gray-200 md:px-6 md:py-5">
         <h2 className=" text-lg text-gray-900">Custom Fields</h2>
-        <ControlledActionButton
-          canUseFeature={canCreateMoreCustomFields}
-          buttonContent={{
-            title: "New Custom Field",
-            message:
-              "You are not able to create more active custom fields within your current plan.",
-          }}
-          buttonProps={{
-            to: "new",
-            role: "link",
-            icon: "plus",
-            "aria-label": `new custom field`,
-            "data-test-id": "createNewCustomField",
-            variant: "primary",
-          }}
-        />
+        <Button
+          to="new"
+          role="link"
+          aria-label="new custom field"
+          data-test-id="createNewCustomField"
+          variant="primary"
+          disabled={
+            !canCreateMoreCustomFields
+              ? {
+                  reason:
+                    "You are not able to create more active custom fields within your current plan.",
+                }
+              : false
+          }
+        >
+          New custom field
+        </Button>
       </div>
       <List
+        bulkActions={<BulkActionsDropdown />}
         ItemComponent={TeamMemberRow}
         headerChildren={
           <>
+            <Th>Categories</Th>
             <Th>Required</Th>
             <Th>Status</Th>
             <Th>Actions</Th>
@@ -130,7 +141,11 @@ export default function CustomFieldsIndexPage() {
     </>
   );
 }
-function TeamMemberRow({ item }: { item: CustomField }) {
+function TeamMemberRow({
+  item,
+}: {
+  item: Prisma.CustomFieldGetPayload<{ include: { categories: true } }>;
+}) {
   return (
     <>
       <Td className="w-full">
@@ -149,14 +164,21 @@ function TeamMemberRow({ item }: { item: CustomField }) {
         </Link>
       </Td>
       <Td>
+        <ListItemCategoryColumn categories={item.categories} />
+      </Td>
+      <Td>
         <span className="text-text-sm font-medium capitalize text-gray-600">
           {item.required ? "Yes" : "No"}
         </span>
       </Td>
       <Td>
-        {!item.active && (
+        {!item.active ? (
           <Badge color="#dc2626" withDot={false}>
             Inactive
+          </Badge>
+        ) : (
+          <Badge color="#059669" withDot={false}>
+            Active
           </Badge>
         )}
       </Td>
@@ -166,3 +188,50 @@ function TeamMemberRow({ item }: { item: CustomField }) {
     </>
   );
 }
+
+const ListItemCategoryColumn = ({ categories }: { categories: Category[] }) => {
+  const visibleCategories = categories?.slice(0, 2);
+  const remainingCategories = categories?.slice(2);
+
+  if (!categories || !categories.length) {
+    return "All";
+  }
+
+  return (
+    <div className="">
+      {visibleCategories?.map((category) => (
+        <CategoryBadge key={category.id} className="mr-2">
+          {category.name}
+        </CategoryBadge>
+      ))}
+      {remainingCategories && remainingCategories?.length > 0 ? (
+        <CategoryBadge
+          className="mr-2 w-6 text-center"
+          title={`${remainingCategories?.map((c) => c.name).join(", ")}`}
+        >
+          {`+${categories.length - 2}`}
+        </CategoryBadge>
+      ) : null}
+    </div>
+  );
+};
+
+export const CategoryBadge = ({
+  children,
+  className,
+  title,
+}: {
+  children: string | JSX.Element;
+  className?: string;
+  title?: string;
+}) => (
+  <span
+    className={tw(
+      "inline-flex justify-center rounded-2xl bg-gray-100 px-[8px] py-[2px] text-center text-[12px] font-medium text-gray-700",
+      className
+    )}
+    title={title}
+  >
+    {children}
+  </span>
+);

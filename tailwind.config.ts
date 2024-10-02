@@ -91,7 +91,6 @@ export default {
       colors: {
         white: "#ffffff",
         black: "#000000",
-        "brand-orange": "#FF7809",
         gray: {
           25: "#FCFCFD",
           50: "#F9FAFB",
@@ -240,6 +239,7 @@ export default {
           "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
         "dark-tremor-dropdown":
           "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
+        "camera-overlay": "0px 0px 0px 2000px rgb(0 0 0 / 0.6)",
       },
       borderRadius: {
         "tremor-small": "0.375rem",
@@ -281,6 +281,27 @@ export default {
       hide: "hide 100ms ease-in",
       slideIn: "slideIn 150ms cubic-bezier(0.16, 1, 0.3, 1)",
       swipeOut: "swipeOut 100ms ease-out",
+    },
+    aspectRatio: {
+      auto: "auto",
+      square: "1 / 1",
+      video: "16 / 9",
+      1: "1",
+      2: "2",
+      3: "3",
+      4: "4",
+      5: "5",
+      6: "6",
+      7: "7",
+      8: "8",
+      9: "9",
+      10: "10",
+      11: "11",
+      12: "12",
+      13: "13",
+      14: "14",
+      15: "15",
+      16: "16",
     },
   },
   safelist: [

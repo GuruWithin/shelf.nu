@@ -1,15 +1,15 @@
 import type { Location } from "@prisma/client";
 
-import { ChevronRight } from "~/components/icons";
+import { ChevronRight } from "~/components/icons/library";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "~/components/shared/dropdown";
-import { tw } from "~/utils";
+import { tw } from "~/utils/tw";
 import { DeleteLocation } from "./delete-location";
-import { Button } from "../shared";
+import { Button } from "../shared/button";
 
 interface Props {
   location: {
@@ -18,7 +18,7 @@ interface Props {
   fullWidth?: boolean;
 }
 
-export const ActionsDopdown = ({ location, fullWidth }: Props) => (
+export const ActionsDropdown = ({ location, fullWidth }: Props) => (
   <DropdownMenu modal={false}>
     <DropdownMenuTrigger
       className={tw("asset-actions", fullWidth ? "w-full" : "")}
@@ -36,7 +36,7 @@ export const ActionsDopdown = ({ location, fullWidth }: Props) => (
     </DropdownMenuTrigger>
     <DropdownMenuContent
       align="end"
-      className="order w-[180px] bg-white p-1.5 text-right "
+      className="order w-[calc(100vw-32px)] bg-white p-1.5 text-right md:w-[180px] "
     >
       <DropdownMenuItem>
         <Button

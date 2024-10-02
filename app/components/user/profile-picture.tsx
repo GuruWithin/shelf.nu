@@ -1,5 +1,5 @@
-import { useUserData } from "~/hooks";
-import { tw } from "~/utils";
+import { useUserData } from "~/hooks/use-user-data";
+import { tw } from "~/utils/tw";
 
 /** Returns the current user's profile picture */
 export default function ProfilePicture({
@@ -20,7 +20,7 @@ export default function ProfilePicture({
 
   return user ? (
     <img
-      src={user.profilePicture || "/images/default_pfp.jpg"}
+      src={user.profilePicture || "/static/images/default_pfp.jpg"}
       alt={`${user.username}`}
       className={styles}
     />

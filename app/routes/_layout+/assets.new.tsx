@@ -1,72 +1,95 @@
 import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
-import { useSearchParams } from "@remix-run/react";
+import { json, redirect, redirectDocument } from "@remix-run/node";
 import { useAtomValue } from "jotai";
-import { parseFormAny } from "react-zorm";
 import { dynamicTitleAtom } from "~/atoms/dynamic-title-atom";
-
 import { AssetForm, NewAssetFormSchema } from "~/components/assets/form";
 import Header from "~/components/layout/header";
-
+import { useSearchParams } from "~/hooks/search-params";
 import {
   createAsset,
-  createNote,
-  getAllRelatedEntries,
+  getAllEntriesForCreateAndEdit,
   updateAssetMainImage,
-} from "~/modules/asset";
-import { commitAuthSession } from "~/modules/auth";
-import { getActiveCustomFields } from "~/modules/custom-field";
-import { getOrganization } from "~/modules/organization";
-import { assertWhetherQrBelongsToCurrentOrganization } from "~/modules/qr";
-import { buildTagsSet } from "~/modules/tag";
-import { assertIsPost, slugify } from "~/utils";
+} from "~/modules/asset/service.server";
+import { getActiveCustomFields } from "~/modules/custom-field/service.server";
+import { createNote } from "~/modules/note/service.server";
+import { assertWhetherQrBelongsToCurrentOrganization } from "~/modules/qr/service.server";
+import { buildTagsSet } from "~/modules/tag/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
-import { setCookie } from "~/utils/cookies.server";
 import {
-  extractCustomFieldValuesFromResults,
+  extractCustomFieldValuesFromPayload,
   mergedSchema,
 } from "~/utils/custom-fields";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
-import { requirePermision } from "~/utils/roles.server";
+import { makeShelfError } from "~/utils/error";
+import {
+  assertIsPost,
+  data,
+  error,
+  getCurrentSearchParams,
+  parseData,
+} from "~/utils/http.server";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.data";
+import { requirePermission } from "~/utils/roles.server";
+import { slugify } from "~/utils/slugify";
 
-const title = "New Asset";
+const title = "New asset";
+const header = {
+  title,
+};
 
-export async function loader({ request }: LoaderFunctionArgs) {
-  const { authSession, organizationId } = await requirePermision(
-    request,
-    PermissionEntity.asset,
-    PermissionAction.create
-  );
+export async function loader({ context, request }: LoaderFunctionArgs) {
+  const authSession = context.getSession();
   const { userId } = authSession;
-  const organization = await getOrganization({ id: organizationId });
-  /**
-   * We need to check if the QR code passed in the URL belongs to the current org
-   * This is relevant whenever the user is trying to link a new asset with an existing QR code
-   * */
-  await assertWhetherQrBelongsToCurrentOrganization({
-    request,
-    organizationId,
-  });
 
-  const { categories, tags, locations, customFields } =
-    await getAllRelatedEntries({
+  try {
+    const { organizationId, currentOrganization } = await requirePermission({
       userId,
+      request,
+      entity: PermissionEntity.asset,
+      action: PermissionAction.create,
+    });
+    /**
+     * We need to check if the QR code passed in the URL belongs to the current org
+     * This is relevant whenever the user is trying to link a new asset with an existing QR code
+     * */
+    await assertWhetherQrBelongsToCurrentOrganization({
+      request,
       organizationId,
     });
 
-  const header = {
-    title,
-  };
+    const { categories, totalCategories, tags, locations, totalLocations } =
+      await getAllEntriesForCreateAndEdit({
+        organizationId,
+        request,
+      });
 
-  return json({
-    header,
-    categories,
-    tags,
-    locations,
-    currency: organization?.currency,
-    customFields,
-  });
+    const searchParams = getCurrentSearchParams(request);
+
+    const customFields = await getActiveCustomFields({
+      organizationId,
+      category: searchParams.get("category"),
+    });
+
+    return json(
+      data({
+        header,
+        categories,
+        totalCategories,
+        tags,
+        totalTags: tags.length,
+        locations,
+        totalLocations,
+        currency: currentOrganization?.currency,
+        customFields,
+      })
+    );
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId });
+    throw json(error(reason));
+  }
 }
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => [
@@ -77,118 +100,124 @@ export const handle = {
   breadcrumb: () => <span>{title}</span>,
 };
 
-export async function action({ request }: LoaderFunctionArgs) {
-  const { authSession, organizationId } = await requirePermision(
-    request,
-    PermissionEntity.asset,
-    PermissionAction.create
-  );
-  assertIsPost(request);
+export async function action({ context, request }: LoaderFunctionArgs) {
+  const authSession = context.getSession();
+  const { userId } = authSession;
 
-  /** Here we need to clone the request as we need 2 different streams:
-   * 1. Access form data for creating asset
-   * 2. Access form data via upload handler to be able to upload the file
-   *
-   * This solution is based on : https://github.com/remix-run/remix/issues/3971#issuecomment-1222127635
-   */
-  const clonedRequest = request.clone();
+  try {
+    assertIsPost(request);
 
-  const formData = await clonedRequest.formData();
+    const { organizationId } = await requirePermission({
+      userId,
+      request,
+      entity: PermissionEntity.asset,
+      action: PermissionAction.create,
+    });
 
-  const customFields = await getActiveCustomFields({
-    organizationId,
-  });
+    const searchParams = getCurrentSearchParams(request);
 
-  const FormSchema = mergedSchema({
-    baseSchema: NewAssetFormSchema,
-    customFields: customFields.map((cf) => ({
-      id: cf.id,
-      name: slugify(cf.name),
-      helpText: cf?.helpText || "",
-      required: cf.required,
-      type: cf.type.toLowerCase() as "text" | "number" | "date" | "boolean",
-      options: cf.options,
-    })),
-  });
-  const result = await FormSchema.safeParseAsync(parseFormAny(formData));
+    const customFields = await getActiveCustomFields({
+      organizationId,
+      category: searchParams.get("category"),
+    });
 
-  if (!result.success) {
-    return json(
-      {
-        errors: result.error,
-      },
-      {
-        status: 400,
-        headers: [setCookie(await commitAuthSession(request, { authSession }))],
-      }
-    );
-  }
+    const FormSchema = mergedSchema({
+      baseSchema: NewAssetFormSchema,
+      customFields: customFields.map((cf) => ({
+        id: cf.id,
+        name: slugify(cf.name),
+        helpText: cf?.helpText || "",
+        required: cf.required,
+        type: cf.type.toLowerCase() as "text" | "number" | "date" | "boolean",
+        options: cf.options,
+      })),
+    });
 
-  const { title, description, category, qrId, newLocationId, valuation } =
-    result.data;
+    /** Here we need to clone the request as we need 2 different streams:
+     * 1. Access form data for creating asset
+     * 2. Access form data via upload handler to be able to upload the file
+     *
+     * This solution is based on : https://github.com/remix-run/remix/issues/3971#issuecomment-1222127635
+     */
+    const clonedRequest = request.clone();
 
-  const customFieldsValues = extractCustomFieldValuesFromResults({
-    result,
-    customFieldDef: customFields,
-  });
+    const formData = await clonedRequest.formData();
 
-  /** This checks if tags are passed and build the  */
-  const tags = buildTagsSet(result.data.tags);
+    const payload = parseData(formData, FormSchema);
 
-  const rsp = await createAsset({
-    organizationId,
-    title,
-    description,
-    userId: authSession.userId,
-    categoryId: category,
-    locationId: newLocationId,
-    qrId,
-    tags,
-    valuation,
-    customFieldsValues,
-  });
+    const customFieldsValues = extractCustomFieldValuesFromPayload({
+      payload,
+      customFieldDef: customFields,
+    });
 
-  if (rsp.error) {
-    return json(
-      {
-        errors: {
-          title: rsp.error,
-        },
-      },
-      {
-        status: 400,
-        headers: [setCookie(await commitAuthSession(request, { authSession }))],
-      }
-    );
-  }
-  const { asset } = rsp;
+    const {
+      title,
+      description,
+      category,
+      qrId,
+      newLocationId,
+      valuation,
+      addAnother,
+    } = payload;
 
-  // Not sure how to handle this failing as the asset is already created
-  await updateAssetMainImage({
-    request,
-    assetId: asset.id,
-    userId: authSession.userId,
-  });
+    /** This checks if tags are passed and build the  */
+    const tags = buildTagsSet(payload.tags);
 
-  sendNotification({
-    title: "Asset created",
-    message: "Your asset has been created successfully",
-    icon: { name: "success", variant: "success" },
-    senderId: authSession.userId,
-  });
+    const asset = await createAsset({
+      organizationId,
+      title,
+      description,
+      userId: authSession.userId,
+      categoryId: category,
+      locationId: newLocationId,
+      qrId,
+      tags,
+      valuation,
+      customFieldsValues,
+    });
 
-  if (asset.location) {
+    // Not sure how to handle this failing as the asset is already created
+    await updateAssetMainImage({
+      request,
+      assetId: asset.id,
+      userId: authSession.userId,
+    });
+
+    sendNotification({
+      title: "Asset created",
+      message: "Your asset has been created successfully",
+      icon: { name: "success", variant: "success" },
+      senderId: authSession.userId,
+    });
+
     await createNote({
-      content: `**${asset.user.firstName?.trim()} ${asset.user.lastName?.trim()}** set the location of **${asset.title?.trim()}** to **${asset.location.name?.trim()}**`,
+      content: `Asset was created by **${asset.user.firstName?.trim()} ${asset.user.lastName?.trim()}**`,
       type: "UPDATE",
       userId: authSession.userId,
       assetId: asset.id,
     });
-  }
 
-  return redirect(`/assets`, {
-    headers: [setCookie(await commitAuthSession(request, { authSession }))],
-  });
+    if (asset.location) {
+      await createNote({
+        content: `**${asset.user.firstName?.trim()} ${asset.user.lastName?.trim()}** set the location of **${asset.title?.trim()}** to *[${asset.location.name.trim()}](/locations/${
+          asset.location.id
+        })**`,
+        type: "UPDATE",
+        userId: authSession.userId,
+        assetId: asset.id,
+      });
+    }
+
+    /** If the user used the add-another button, we reload the document to reset the form */
+    if (addAnother) {
+      return redirectDocument(`/assets/new?`);
+    }
+
+    return redirect(`/assets`);
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId });
+    return json(error(reason), { status: reason.status });
+  }
 }
 
 export default function NewAssetPage() {

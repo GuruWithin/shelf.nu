@@ -1,5 +1,6 @@
-import { useState, type ChangeEvent, useEffect } from "react";
-import { getRandomColor } from "~/utils";
+import type { ChangeEvent } from "react";
+import { useState, useEffect } from "react";
+import { getRandomColor } from "~/utils/get-random-color";
 import Input from "./input";
 
 import { Button } from "../shared/button";

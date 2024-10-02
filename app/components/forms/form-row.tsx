@@ -1,5 +1,5 @@
 import React from "react";
-import { tw } from "~/utils";
+import { tw } from "~/utils/tw";
 import SubHeading from "../shared/sub-heading";
 
 interface Props {
@@ -20,12 +20,9 @@ export default function FormRow({
 }: Props) {
   return (
     <div
-      className={tw(
-        `flex gap-8 border-b-[1px] border-y-gray-200 py-6`,
-        className
-      )}
+      className={tw(`flex gap-8 border-b border-y-gray-200 py-6`, className)}
     >
-      <div className="hidden lg:block lg:basis-[280px]">
+      <div className="hidden lg:block lg:min-w-[280px] lg:basis-[280px]">
         <div
           className={tw(
             "text-text-sm font-medium text-gray-700",
@@ -37,7 +34,7 @@ export default function FormRow({
         <SubHeading className="text-xs text-gray-600">{subHeading}</SubHeading>
       </div>
 
-      <div className="flex w-[512px] flex-wrap">{children}</div>
+      <div className="flex w-[512px] max-w-full flex-wrap">{children}</div>
     </div>
   );
 }

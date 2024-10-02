@@ -1,23 +1,17 @@
-import type { Organization } from "@prisma/client";
-import { ShelfStackError } from "~/utils/error";
-import { useMatchesData } from "./use-matches-data";
+import { useRouteLoaderData } from "@remix-run/react";
+import type { loader } from "~/routes/_layout+/_layout";
 
 /**
  * This base hook is used to access the organization from within the _layout route
- * @param {string} id The route id
- * @returns {JSON|undefined} The router data or undefined if not found
+ * @returns The organization data or undefined if not found
  */
-export function useCurrentOrganization(): Organization | undefined {
-  const layoutData = useMatchesData<{
-    organizations: Organization[];
-    currentOrganizationId: string;
-  }>("routes/_layout+/_layout");
+export function useCurrentOrganization() {
+  const layoutData = useRouteLoaderData<typeof loader>(
+    "routes/_layout+/_layout"
+  );
 
-  if (!layoutData) {
-    throw new ShelfStackError({
-      message:
-        "Something went wrong with fetching your organization defails. If the issue persists, please contact support",
-    });
+  if (!layoutData || !layoutData.organizations) {
+    return undefined;
   }
 
   return layoutData.organizations.find(

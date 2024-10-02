@@ -1,6 +1,10 @@
 import { useMemo } from "react";
-import { NavLink, useSearchParams } from "@remix-run/react";
-import { getParamsValues, mergeSearchParams, tw } from "~/utils";
+import { NavLink } from "@remix-run/react";
+import { useSearchParams } from "~/hooks/search-params";
+
+import { getParamsValues } from "~/utils/list";
+import { mergeSearchParams } from "~/utils/merge-search-params";
+import { tw } from "~/utils/tw";
 
 export const PageNumber = ({ number }: { number: number }) => {
   const [searchParams] = useSearchParams();

@@ -7,72 +7,104 @@ import type {
 import { json, redirect } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import { useAtomValue } from "jotai";
-import { parseFormAny } from "react-zorm";
+import { z } from "zod";
 import { dynamicTitleAtom } from "~/atoms/dynamic-title-atom";
 import { AssetForm, NewAssetFormSchema } from "~/components/assets/form";
-import { ErrorBoundryComponent } from "~/components/errors";
 
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
 import {
-  getAllRelatedEntries,
+  getAllEntriesForCreateAndEdit,
   getAsset,
   updateAsset,
   updateAssetMainImage,
-} from "~/modules/asset";
+} from "~/modules/asset/service.server";
 
-import { commitAuthSession } from "~/modules/auth";
-import { getActiveCustomFields } from "~/modules/custom-field";
-import { getOrganization } from "~/modules/organization";
-import { buildTagsSet } from "~/modules/tag";
-import { assertIsPost, getRequiredParam, slugify } from "~/utils";
+import { getActiveCustomFields } from "~/modules/custom-field/service.server";
+import { buildTagsSet } from "~/modules/tag/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
-import { setCookie } from "~/utils/cookies.server";
 import {
-  extractCustomFieldValuesFromResults,
+  extractCustomFieldValuesFromPayload,
   mergedSchema,
 } from "~/utils/custom-fields";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { ShelfStackError } from "~/utils/error";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
-import { requirePermision } from "~/utils/roles.server";
+import { makeShelfError } from "~/utils/error";
+import {
+  assertIsPost,
+  data,
+  error,
+  getCurrentSearchParams,
+  getParams,
+  parseData,
+} from "~/utils/http.server";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.data";
+import { requirePermission } from "~/utils/roles.server";
+import { slugify } from "~/utils/slugify";
 
-export async function loader({ request, params }: LoaderFunctionArgs) {
-  const { authSession, organizationId } = await requirePermision(
-    request,
-    PermissionEntity.asset,
-    PermissionAction.update
-  );
-  const organization = await getOrganization({ id: organizationId });
+export async function loader({ context, request, params }: LoaderFunctionArgs) {
+  const authSession = context.getSession();
   const { userId } = authSession;
+  const { assetId: id } = getParams(params, z.object({ assetId: z.string() }), {
+    additionalData: { userId },
+  });
 
-  const { categories, tags, locations, customFields } =
-    await getAllRelatedEntries({
+  try {
+    const { organizationId, currentOrganization } = await requirePermission({
       userId,
-      organizationId,
+      request,
+      entity: PermissionEntity.asset,
+      action: PermissionAction.update,
     });
 
-  const id = getRequiredParam(params, "assetId");
+    const asset = await getAsset({
+      organizationId,
+      id,
+      include: { tags: true, customFields: true },
+    });
 
-  const asset = await getAsset({ organizationId, id });
-  if (!asset) {
-    throw new ShelfStackError({ message: "Not Found", status: 404 });
+    const { categories, totalCategories, tags, locations, totalLocations } =
+      await getAllEntriesForCreateAndEdit({
+        request,
+        organizationId,
+        defaults: {
+          category: asset.categoryId,
+          location: asset.locationId,
+        },
+      });
+
+    const searchParams = getCurrentSearchParams(request);
+
+    const customFields = await getActiveCustomFields({
+      organizationId,
+      category: searchParams.get("category") ?? asset.categoryId,
+    });
+
+    const header: HeaderData = {
+      title: `Edit | ${asset.title}`,
+      subHeading: asset.id,
+    };
+
+    return json(
+      data({
+        asset,
+        header,
+        categories,
+        totalCategories,
+        tags,
+        totalTags: tags.length,
+        locations,
+        totalLocations,
+        currency: currentOrganization?.currency,
+        customFields,
+      })
+    );
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId, id });
+    throw json(error(reason), { status: reason.status });
   }
-
-  const header: HeaderData = {
-    title: `Edit | ${asset.title}`,
-    subHeading: asset.id,
-  };
-
-  return json({
-    asset,
-    header,
-    categories,
-    tags,
-    locations,
-    currency: organization?.currency,
-    customFields,
-  });
 }
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => [
@@ -83,107 +115,103 @@ export const handle = {
   breadcrumb: () => "single",
 };
 
-export async function action({ request, params }: ActionFunctionArgs) {
-  assertIsPost(request);
-  const { authSession, organizationId } = await requirePermision(
-    request,
-    PermissionEntity.asset,
-    PermissionAction.update
-  );
-
-  const id = getRequiredParam(params, "assetId");
-  const clonedRequest = request.clone();
-  const formData = await clonedRequest.formData();
-
-  const customFields = await getActiveCustomFields({
-    organizationId,
+export async function action({ context, request, params }: ActionFunctionArgs) {
+  const authSession = context.getSession();
+  const { userId } = authSession;
+  const { assetId: id } = getParams(params, z.object({ assetId: z.string() }), {
+    additionalData: { userId },
   });
 
-  const FormSchema = mergedSchema({
-    baseSchema: NewAssetFormSchema,
-    customFields: customFields.map((cf) => ({
-      id: cf.id,
-      name: slugify(cf.name),
-      helpText: cf?.helpText || "",
-      required: cf.required,
-      type: cf.type.toLowerCase() as "text" | "number" | "date" | "boolean",
-      options: cf.options,
-    })),
-  });
-  const result = await FormSchema.safeParseAsync(parseFormAny(formData));
-  const customFieldsValues = extractCustomFieldValuesFromResults({
-    result,
-    customFieldDef: customFields,
-  });
+  try {
+    assertIsPost(request);
 
-  if (!result.success) {
-    return json(
-      {
-        errors: result.error,
-        success: false,
-      },
-      {
-        status: 400,
-        headers: [setCookie(await commitAuthSession(request, { authSession }))],
-      }
-    );
+    const { organizationId } = await requirePermission({
+      userId,
+      request,
+      entity: PermissionEntity.asset,
+      action: PermissionAction.update,
+    });
+
+    const clonedRequest = request.clone();
+    const formData = await clonedRequest.formData();
+
+    const searchParams = getCurrentSearchParams(request);
+
+    const customFields = await getActiveCustomFields({
+      organizationId,
+      category:
+        searchParams.get("category") ?? String(formData.get("category")),
+    });
+
+    const FormSchema = mergedSchema({
+      baseSchema: NewAssetFormSchema,
+      customFields: customFields.map((cf) => ({
+        id: cf.id,
+        name: slugify(cf.name),
+        helpText: cf?.helpText || "",
+        required: cf.required,
+        type: cf.type.toLowerCase() as "text" | "number" | "date" | "boolean",
+        options: cf.options,
+      })),
+    });
+
+    const payload = parseData(formData, FormSchema, {
+      additionalData: { userId, organizationId },
+    });
+
+    const customFieldsValues = extractCustomFieldValuesFromPayload({
+      payload,
+      customFieldDef: customFields,
+    });
+
+    await updateAssetMainImage({
+      request,
+      assetId: id,
+      userId: authSession.userId,
+    });
+
+    const {
+      title,
+      description,
+      category,
+      newLocationId,
+      currentLocationId,
+      valuation,
+      addAnother,
+    } = payload;
+
+    /** This checks if tags are passed and build the  */
+    const tags = buildTagsSet(payload.tags);
+
+    await updateAsset({
+      id,
+      title,
+      description,
+      categoryId: category ? category : "uncategorized",
+      tags,
+      newLocationId,
+      currentLocationId,
+      userId: authSession.userId,
+      customFieldsValues,
+      valuation,
+    });
+
+    sendNotification({
+      title: "Asset updated",
+      message: "Your asset has been updated successfully",
+      icon: { name: "success", variant: "success" },
+      senderId: authSession.userId,
+    });
+
+    if (addAnother) {
+      return redirect(`/assets/new`);
+    }
+
+    return redirect(`/assets/${id}`);
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId, id });
+    return json(error(reason), { status: reason.status });
   }
-
-  await updateAssetMainImage({
-    request,
-    assetId: id,
-    userId: authSession.userId,
-  });
-
-  const {
-    title,
-    description,
-    category,
-    newLocationId,
-    currentLocationId,
-    valuation,
-  } = result.data;
-
-  /** This checks if tags are passed and build the  */
-  const tags = buildTagsSet(result.data.tags);
-
-  const rsp = await updateAsset({
-    id,
-    title,
-    description,
-    categoryId: category,
-    tags,
-    newLocationId,
-    currentLocationId,
-    userId: authSession.userId,
-    customFieldsValues,
-    valuation,
-  });
-
-  if (rsp.error) {
-    return json(
-      {
-        errors: {
-          title: rsp.error,
-        },
-      },
-      {
-        status: 400,
-        headers: [setCookie(await commitAuthSession(request, { authSession }))],
-      }
-    );
-  }
-
-  sendNotification({
-    title: "Asset updated",
-    message: "Your asset has been updated successfully",
-    icon: { name: "success", variant: "success" },
-    senderId: authSession.userId,
-  });
-
-  return redirect(`/assets/${id}`, {
-    headers: [setCookie(await commitAuthSession(request, { authSession }))],
-  });
 }
 
 export default function AssetEditPage() {
@@ -200,6 +228,9 @@ export default function AssetEditPage() {
       <Header title={hasTitle ? title : asset.title} />
       <div className=" items-top flex justify-between">
         <AssetForm
+          id={asset.id}
+          mainImage={asset.mainImage}
+          mainImageExpiration={String(asset.mainImageExpiration)}
           title={asset.title}
           category={asset.categoryId}
           location={asset.locationId}
@@ -211,5 +242,3 @@ export default function AssetEditPage() {
     </>
   );
 }
-
-export const ErrorBoundary = () => <ErrorBoundryComponent />;

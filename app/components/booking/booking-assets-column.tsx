@@ -1,23 +1,36 @@
-import { useMemo } from "react";
-
+import React, { useMemo } from "react";
+import type { Kit } from "@prisma/client";
 import { AssetStatus, BookingStatus } from "@prisma/client";
 import { useLoaderData } from "@remix-run/react";
-import { useBookingStatus } from "~/hooks/use-booking-status";
-import { useUserIsSelfService } from "~/hooks/user-user-is-self-service";
+import { useBookingStatusHelpers } from "~/hooks/use-booking-status";
+import { useUserRoleHelper } from "~/hooks/user-user-role-helper";
 import type { BookingWithCustodians } from "~/routes/_layout+/bookings";
 import type { AssetWithBooking } from "~/routes/_layout+/bookings.$bookingId.add-assets";
+import { groupBy } from "~/utils/utils";
 import { AssetRowActionsDropdown } from "./asset-row-actions-dropdown";
 import { AvailabilityLabel } from "./availability-label";
+import KitRowActionsDropdown from "./kit-row-actions-dropdown";
 import { AssetImage } from "../assets/asset-image";
 import { AssetStatusBadge } from "../assets/asset-status-badge";
-import { List } from "../list";
-import { Badge, Button } from "../shared";
-import { ControlledActionButton } from "../shared/controlled-action-button";
+import { EmptyState } from "../list/empty-state";
+import { ListHeader } from "../list/list-header";
+import { ListItem, type ListItemData } from "../list/list-item";
+import { Pagination } from "../list/pagination";
+import { Badge } from "../shared/badge";
+import { Button } from "../shared/button";
 import TextualDivider from "../shared/textual-divider";
-import { Td, Th } from "../table";
+import { Table, Td, Th } from "../table";
 
 export function BookingAssetsColumn() {
-  const { booking } = useLoaderData<{ booking: BookingWithCustodians }>();
+  const { booking, items, totalItems } = useLoaderData<{
+    booking: BookingWithCustodians;
+    items: ListItemData[];
+    totalItems: number;
+  }>();
+  const hasItems = items?.length > 0;
+  const { isBase } = useUserRoleHelper();
+  const { isDraft, isReserved, isCompleted, isArchived, isCancelled } =
+    useBookingStatusHelpers(booking);
 
   const manageAssetsUrl = useMemo(
     () =>
@@ -32,13 +45,49 @@ export function BookingAssetsColumn() {
     [booking]
   );
 
-  const isCompleted = useMemo(
-    () => booking.status === BookingStatus.COMPLETE,
-    [booking.status]
+  // Self service can only manage assets for bookings that are DRAFT
+  const cantManageAssetsAsBase =
+    isBase && booking.status !== BookingStatus.DRAFT;
+
+  const { assetsWithoutKits, groupedAssetsWithKits } = useMemo(
+    () => ({
+      assetsWithoutKits: items.filter((item) => !item.kitId),
+      groupedAssetsWithKits: groupBy(
+        items.filter((item) => !!item.kitId),
+        (item) => item.kitId
+      ),
+    }),
+    [items]
   );
-  const isArchived = useMemo(
-    () => booking.status === BookingStatus.ARCHIVED,
-    [booking.status]
+
+  const manageAssetsButtonDisabled = useMemo(
+    () =>
+      !booking.from ||
+      !booking.to ||
+      isCompleted ||
+      isArchived ||
+      isCancelled ||
+      cantManageAssetsAsBase
+        ? {
+            reason: isCompleted
+              ? "Booking is completed. You cannot change the assets anymore"
+              : isArchived
+              ? "Booking is archived. You cannot change the assets anymore"
+              : isCancelled
+              ? "Booking is cancelled. You cannot change the assets anymore"
+              : cantManageAssetsAsBase
+              ? "You are unable to manage assets at this point because the booking is already reserved. Cancel this booking and create another one if you need to make changes."
+              : "You need to select a start and end date and save your booking before you can add assets to your booking",
+          }
+        : false,
+    [
+      booking.from,
+      booking.to,
+      isCompleted,
+      isArchived,
+      isCancelled,
+      cantManageAssetsAsBase,
+    ]
   );
 
   return (
@@ -48,52 +97,111 @@ export function BookingAssetsColumn() {
         <div className="mb-3 flex gap-4 lg:hidden"></div>
         <div className="flex flex-col">
           {/* THis is a fake table header */}
-          <div className="-mx-4 flex justify-between border border-b-0 bg-white p-4 text-left font-normal text-gray-600 md:mx-0 md:rounded md:px-6">
+          <div className="-mx-4 flex justify-between border border-b-0 bg-white p-4 text-left font-normal text-gray-600 md:mx-0 md:rounded-t md:px-6">
             <div>
               <div className=" text-md font-semibold text-gray-900">Assets</div>
-              <div>{booking.assets.length} items</div>
+              <div>
+                <span>{totalItems} items</span>
+              </div>
             </div>
-            <ControlledActionButton
-              canUseFeature={
-                !!booking.from && !!booking.to && !isCompleted && !isArchived
-              }
-              buttonContent={{
-                title: "Manage Assets",
-                message: isCompleted
-                  ? "Booking is completed. You cannot change the assets anymore"
-                  : "You need to select a start and end date and save your booking before you can add assets to your booking",
-              }}
-              buttonProps={{
-                as: "button",
-                to: manageAssetsUrl,
-                icon: "plus",
-                className: "whitespace-nowrap",
-              }}
-              skipCta={true}
-            />
+
+            <div className="flex items-center gap-2">
+              <Button
+                icon="scan"
+                variant="secondary"
+                to="scan-assets"
+                disabled={manageAssetsButtonDisabled}
+              >
+                Scan
+              </Button>
+              <Button
+                to={manageAssetsUrl}
+                className="whitespace-nowrap"
+                disabled={manageAssetsButtonDisabled}
+              >
+                Manage assets
+              </Button>
+            </div>
           </div>
-          <List
-            ItemComponent={ListAssetContent}
-            hideFirstHeaderColumn={true}
-            headerChildren={
+
+          <div className="-mx-4 overflow-x-auto border border-b-0 border-gray-200 bg-white md:mx-0 md:rounded-b">
+            {!hasItems ? (
+              <EmptyState
+                className="py-10"
+                customContent={{
+                  title: "Start by defining a booking period",
+                  text: "Assets added to your booking will show up here. Scan tags or search for assets to add to your booking.",
+                  newButtonRoute: manageAssetsUrl,
+                  newButtonContent: "Manage assets",
+                  buttonProps: {
+                    disabled: manageAssetsButtonDisabled,
+                  },
+                }}
+              />
+            ) : (
               <>
-                <Th>Name</Th>
-                <Th> </Th>
-                <Th>Category</Th>
-                <Th> </Th>
+                <Table className="">
+                  <ListHeader hideFirstColumn>
+                    <Th>Name</Th>
+                    <Th> </Th>
+                    <Th>Category</Th>
+                    <Th> </Th>
+                  </ListHeader>
+                  <tbody>
+                    {/* List all assets without kit at once */}
+                    {assetsWithoutKits.map((asset) => (
+                      <ListItem key={asset.id} item={asset}>
+                        <ListAssetContent item={asset as AssetWithBooking} />
+                      </ListItem>
+                    ))}
+
+                    {/* List all the assets which are part of a kit */}
+                    {Object.values(groupedAssetsWithKits).map((assets) => {
+                      const kit = assets[0].kit as Kit;
+
+                      return (
+                        <React.Fragment key={kit.id}>
+                          <ListItem item={kit} className="bg-gray-50">
+                            <Td className="w-full">
+                              <Button
+                                to={`/kits/${kit.id}`}
+                                variant="link"
+                                className="text-gray-900 hover:text-gray-700"
+                              >
+                                {kit.name}
+                              </Button>
+
+                              <p className="text-sm text-gray-600">
+                                {assets.length} assets
+                              </p>
+                            </Td>
+
+                            <Td> </Td>
+                            <Td> </Td>
+
+                            <Td className="pr-4 text-right">
+                              {(!isBase && isDraft) || isReserved ? (
+                                <KitRowActionsDropdown kit={kit} />
+                              ) : null}
+                            </Td>
+                          </ListItem>
+
+                          {assets.map((asset) => (
+                            <ListItem key={asset.id} item={asset}>
+                              <ListAssetContent
+                                item={asset as AssetWithBooking}
+                              />
+                            </ListItem>
+                          ))}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </Table>
+                <Pagination className="border-b" />
               </>
-            }
-            customEmptyStateContent={{
-              title: "Start by defining a booking period",
-              text: "Assets added to your booking will show up here. You must select a Start and End date and Save your booking in order to be able to add assets.",
-              newButtonRoute: manageAssetsUrl,
-              newButtonContent: "Manage Assets",
-              buttonProps: {
-                disabled: !booking.from || !booking.to,
-              },
-            }}
-            className="md:rounded-t-[0px]"
-          />
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -103,9 +211,9 @@ export function BookingAssetsColumn() {
 const ListAssetContent = ({ item }: { item: AssetWithBooking }) => {
   const { category } = item;
   const { booking } = useLoaderData<{ booking: BookingWithCustodians }>();
-  const isSelfService = useUserIsSelfService();
-  const { isOngoing, isCompleted, isArchived, isOverdue } =
-    useBookingStatus(booking);
+  const { isBase } = useUserRoleHelper();
+  const { isOngoing, isCompleted, isArchived, isOverdue, isReserved } =
+    useBookingStatusHelpers(booking);
 
   /** Weather the asset is checked out in a booking different than the current one */
   const isCheckedOut = useMemo(
@@ -116,12 +224,14 @@ const ListAssetContent = ({ item }: { item: AssetWithBooking }) => {
     [item.status, item.bookings, booking.id]
   );
 
+  const isPartOfKit = !!item.kitId;
+
   return (
     <>
-      <Td className="w-full p-0 md:p-0">
-        <div className="flex justify-between gap-3 p-4 md:justify-normal md:px-6">
+      <Td className="w-full whitespace-normal p-0 md:p-0">
+        <div className="flex justify-between gap-3 p-4  md:justify-normal md:px-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center">
+            <div className="relative flex size-12 shrink-0 items-center justify-center">
               <AssetImage
                 asset={{
                   assetId: item.id,
@@ -129,26 +239,24 @@ const ListAssetContent = ({ item }: { item: AssetWithBooking }) => {
                   mainImageExpiration: item.mainImageExpiration,
                   alt: item.title,
                 }}
-                className="h-full w-full rounded-[4px] border object-cover"
+                className="size-full rounded-[4px] border object-cover"
               />
             </div>
-            <div className="flex flex-row items-center gap-2 md:flex-col md:items-start md:gap-0">
-              <div className="min-w-[130px]">
-                <span className="word-break mb-1 block font-medium">
-                  <Button
-                    to={`/assets/${item.id}`}
-                    variant="link"
-                    className="text-gray-900 hover:text-gray-700"
-                  >
-                    {item.title}
-                  </Button>
-                </span>
-                <div>
-                  <AssetStatusBadge
-                    status={item.status}
-                    availableToBook={item.availableToBook}
-                  />
-                </div>
+            <div className="min-w-[180px]">
+              <span className="word-break mb-1 block font-medium">
+                <Button
+                  to={`/assets/${item.id}`}
+                  variant="link"
+                  className="text-left text-gray-900 hover:text-gray-700"
+                >
+                  {item.title}
+                </Button>
+              </span>
+              <div>
+                <AssetStatusBadge
+                  status={item.status}
+                  availableToBook={item.availableToBook}
+                />
               </div>
             </div>
           </div>
@@ -168,8 +276,9 @@ const ListAssetContent = ({ item }: { item: AssetWithBooking }) => {
         ) : null}
       </Td>
       <Td className="pr-4 text-right">
-        {/* Self Service can only remove assets if the booking is not started already */}
-        {isSelfService && (isOngoing || isOverdue) ? null : (
+        {/* Base users can only remove assets if the booking is not started already */}
+        {(isBase && (isOngoing || isOverdue || isReserved)) ||
+        isPartOfKit ? null : (
           <AssetRowActionsDropdown asset={item} />
         )}
       </Td>

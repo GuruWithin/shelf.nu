@@ -1,17 +1,9 @@
 import { useState } from "react";
-import type { LinksFunction } from "@remix-run/node";
-import { useSearchParams } from "@remix-run/react";
 import { ClientOnly } from "remix-utils/client-only";
 import { Pagination, Navigation } from "swiper/modules";
 import { Swiper, SwiperSlide } from "swiper/react";
+import { useSearchParams } from "~/hooks/search-params";
 import { Button } from "../shared/button";
-
-export const links: LinksFunction = () => [
-  {
-    rel: "stylesheet",
-    href: "https://cdn.jsdelivr.net/npm/swiper@10/swiper-bundle.min.css",
-  },
-];
 
 export default function WelcomeCarousel() {
   return <ClientOnly fallback={null}>{() => <Carousel />}</ClientOnly>;
@@ -41,7 +33,7 @@ function Carousel() {
             <div>
               <figure className="mb-6">
                 <img
-                  src="/images/shelf-visual1.jpg"
+                  src="/static/images/shelf-visual1.jpg"
                   alt="img"
                   className=" object-cover"
                 />
@@ -59,7 +51,7 @@ function Carousel() {
             <div>
               <figure className="mb-6">
                 <img
-                  src="/images/shelf-visual2.jpg"
+                  src="/static/images/shelf-visual2.jpg"
                   alt="img"
                   className=" object-cover"
                 />
@@ -78,7 +70,7 @@ function Carousel() {
             <div>
               <figure className="mb-6">
                 <img
-                  src="/images/shelf-visual3.jpg"
+                  src="/static/images/shelf-visual3.jpg"
                   alt="img"
                   className=" object-cover"
                 />
@@ -104,7 +96,7 @@ function Carousel() {
             className="carousel-next-btn mt-5"
             width="full"
           >
-            {isOrgInvite ? "View assets" : "New Asset"}
+            {isOrgInvite ? "View assets" : "New asset"}
           </Button>
         ) : (
           <Button

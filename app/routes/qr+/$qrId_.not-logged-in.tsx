@@ -1,14 +1,18 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useSearchParams } from "@remix-run/react";
-import { CuboidIcon } from "~/components/icons";
-import { Button } from "~/components/shared";
-import { usePosition } from "~/hooks";
+import { useLoaderData } from "@remix-run/react";
+import { z } from "zod";
+import { CuboidIcon } from "~/components/icons/library";
+import { Button } from "~/components/shared/button";
+import { useSearchParams } from "~/hooks/search-params";
+import { usePosition } from "~/hooks/use-position";
+import { data, getParams } from "~/utils/http.server";
 
-export const loader = ({ params }: LoaderFunctionArgs) => {
-  const qrId = params.qrId as string;
-  return json({ qrId });
-};
+export function loader({ params }: LoaderFunctionArgs) {
+  const { qrId } = getParams(params, z.object({ qrId: z.string() }));
+
+  return json(data({ qrId }));
+}
 
 export default function QrNotLoggedIn() {
   const [searchParams] = useSearchParams();
@@ -24,10 +28,10 @@ export default function QrNotLoggedIn() {
           </div>
           <div className="mb-8">
             <h1 className="mb-2 text-[24px] font-semibold">
-              Thank you for Scanning
+              Thank you for scanning
             </h1>
             <p className="text-gray-600">
-              Log in if you own this asset. Contact the owner to report it found
+              Log in if you own this item. Contact the owner to report it found
               if it's lost.
             </p>
           </div>

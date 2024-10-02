@@ -1,9 +1,12 @@
-// import type { Asset } from "@prisma/client";
-
 import type { Custody, Prisma } from "@prisma/client";
-import { db } from "~/database";
+import {
+  assetStatusColorMap,
+  userFriendlyAssetStatus,
+} from "~/components/assets/asset-status-badge";
+import { db } from "~/database/db.server";
 import type { TeamMemberWithUser } from "~/modules/team-member/types";
-import { defaultUserCategories } from "~/modules/user";
+import { defaultUserCategories } from "~/modules/user/service.server";
+import { ShelfError } from "./error";
 
 type Asset = Prisma.AssetGetPayload<{
   include: {
@@ -24,11 +27,7 @@ type Asset = Prisma.AssetGetPayload<{
 /**
  * Asset created in each month in the last year.
  * */
-export async function totalAssetsAtEndOfEachMonth({
-  assets,
-}: {
-  assets: Asset[];
-}) {
+export function totalAssetsAtEndOfEachMonth({ assets }: { assets: Asset[] }) {
   const currentDate = new Date();
   const twelveMonthsAgo = new Date();
   twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 11);
@@ -149,25 +148,73 @@ function hasCustody(asset: Asset): asset is Asset & { custody: Custody } {
   return asset.custody !== null;
 }
 
-export async function getCustodiansOrderedByTotalCustodies({
+export function getCustodiansOrderedByTotalCustodies({
   assets,
+  bookings,
 }: {
   assets: Asset[];
+  bookings: Prisma.BookingGetPayload<{
+    include: {
+      custodianTeamMember: true;
+      custodianUser: true;
+      assets: true;
+    };
+  }>[];
 }) {
   const assetsWithCustody = assets.filter(
     (asset) => asset.custody && asset.custody.custodian
   );
-  const allCustodiansSet = new Set(
-    assetsWithCustody.filter(hasCustody).map((asset) => asset.custody.custodian)
-  );
-  const allCustodians = Array.from(allCustodiansSet).filter(Boolean);
 
+  /** All custodians with directly assigned custody via assets */
+  const allDirectCustodians = Array.from(
+    new Set(
+      assetsWithCustody
+        .filter(hasCustody)
+        .map((asset) => asset.custody.custodian)
+    )
+  ).filter(Boolean);
+
+  /** All custodians with custody via bookings */
+  const allBookerCustodians = Array.from(
+    new Set(
+      bookings.map((booking) =>
+        booking.custodianUser
+          ? {
+              id: booking.custodianUserId,
+              userId: booking.custodianUserId,
+              user: booking.custodianUser,
+            }
+          : {
+              id: booking.custodianTeamMemberId,
+              ...booking.custodianTeamMember,
+            }
+      )
+    )
+  ).filter(Boolean);
+
+  const allCustodians = [...allDirectCustodians, ...allBookerCustodians];
   let custodianCounts: { [key: string]: number } = {};
 
+  /** Count normal custodies */
   for (let asset of assetsWithCustody) {
     if (asset.custody) {
-      let custodianId = asset.custody.custodian.id;
-      custodianCounts[custodianId] = (custodianCounts[custodianId] || 0) + 1;
+      // will use userId to map and show consolidated hold of assets (through bookings or direct custodies) of a team member, in case of NRM will use custodian id
+      let userId = asset.custody.custodian.userId
+        ? asset.custody.custodian.userId
+        : asset.custody.custodian.id;
+      custodianCounts[userId] = (custodianCounts[userId] || 0) + 1;
+    }
+  }
+
+  /** Count custodies via bookings */
+  for (let booking of bookings) {
+    if (booking.custodianUserId) {
+      custodianCounts[booking.custodianUserId] =
+        (custodianCounts[booking.custodianUserId] || 0) + booking.assets.length;
+    } else if (booking.custodianTeamMemberId) {
+      custodianCounts[booking.custodianTeamMemberId] =
+        (custodianCounts[booking.custodianTeamMemberId] || 0) +
+        booking.assets.length;
     }
   }
 
@@ -178,8 +225,8 @@ export async function getCustodiansOrderedByTotalCustodies({
     ([id, count]) => ({
       id,
       count,
-      custodian: allCustodians.find(
-        (custodian) => custodian.id === id
+      custodian: allCustodians.find((custodian) =>
+        custodian.userId ? custodian.userId === id : custodian.id === id
       ) as TeamMemberWithUser,
     })
   );
@@ -197,7 +244,7 @@ export async function getCustodiansOrderedByTotalCustodies({
 /**
  * Most scanned assets
  */
-export async function getMostScannedAssets({ assets }: { assets: Asset[] }) {
+export function getMostScannedAssets({ assets }: { assets: Asset[] }) {
   const assetsWithScans = assets.filter((asset) => asset.qrCodes.length > 0);
 
   const assetsWithScanCount = assetsWithScans.map((asset) => ({
@@ -219,7 +266,7 @@ export async function getMostScannedAssets({ assets }: { assets: Asset[] }) {
  * Most scanned assets' categories
  * Gives a list of the categories from all assets
  */
-export async function getMostScannedAssetsCategories({
+export function getMostScannedAssetsCategories({
   assets,
 }: {
   assets: Asset[];
@@ -274,43 +321,41 @@ export async function getMostScannedAssetsCategories({
 /**
  * Assets grouped per status
  */
-export async function groupAssetsByStatus({ assets }: { assets: Asset[] }) {
-  const assetsByStatus: Record<string, { status: string; assets: Asset[] }> =
-    {};
+export function groupAssetsByStatus({ assets }: { assets: Asset[] }) {
+  const assetsByStatus: Record<
+    string,
+    { status: string; assets: Asset[]; color: string }
+  > = {};
 
   for (let asset of assets) {
     let status = asset.status;
     if (!assetsByStatus[status]) {
       assetsByStatus[status] = {
-        status,
+        status: userFriendlyAssetStatus(status),
         assets: [],
+        color: assetStatusColorMap(status),
       };
     }
     assetsByStatus[status].assets.push(asset);
   }
 
   const assetsByStatusArray = Object.values(assetsByStatus);
-  const FORMAT_STATUS: { [key: string]: string } = {
-    AVAILABLE: "Available",
-    IN_CUSTODY: "In Custody",
-  };
 
   const chartData = assetsByStatusArray.map((cd) => ({
-    status: FORMAT_STATUS[cd.status],
+    status: cd.status,
     assets: cd.assets.length,
+    color: cd.color,
   }));
+
   return {
     chartData,
-    availableAssets: chartData.find((obj) => obj.status == "Available")?.assets,
-    inCustodyAssets: chartData.find((obj) => obj.status == "In Custody")
-      ?.assets,
   };
 }
 
 /**
  * Assets grouped per category
  */
-export async function groupAssetsByCategory({ assets }: { assets: Asset[] }) {
+export function groupAssetsByCategory({ assets }: { assets: Asset[] }) {
   const assetsByCategory: Record<
     string,
     { category: string; assets: Asset[]; id: string }
@@ -353,56 +398,66 @@ export async function checklistOptions({
   assets: Asset[];
   organizationId: string;
 }) {
-  const [
-    categoriesCount,
-    tagsCount,
-    teamMembersCount,
-    custodiesCount,
-    customFieldsCount,
-  ] = await db.$transaction([
-    /** Get the categories */
-    db.category.count({
-      where: {
-        organizationId,
-        name: {
-          notIn: defaultUserCategories.map((uc) => uc.name),
+  try {
+    const [
+      categoriesCount,
+      tagsCount,
+      teamMembersCount,
+      custodiesCount,
+      customFieldsCount,
+    ] = await Promise.all([
+      /** Get the categories */
+      db.category.count({
+        where: {
+          organizationId,
+          name: {
+            notIn: defaultUserCategories.map((uc) => uc.name),
+          },
         },
-      },
-    }),
+      }),
 
-    db.tag.count({
-      where: {
-        organizationId,
-      },
-    }),
-
-    db.teamMember.count({
-      where: {
-        organizationId,
-      },
-    }),
-
-    db.teamMember.count({
-      where: {
-        organizationId,
-        custodies: {
-          some: {},
+      db.tag.count({
+        where: {
+          organizationId,
         },
-      },
-    }),
-    db.customField.count({
-      where: {
-        organizationId,
-      },
-    }),
-  ]);
+      }),
 
-  return {
-    hasAssets: assets.length > 0,
-    hasCategories: categoriesCount > 0,
-    hasTags: tagsCount > 0,
-    hasTeamMembers: teamMembersCount > 0,
-    hasCustodies: custodiesCount > 0,
-    hasCustomFields: customFieldsCount > 0,
-  };
+      db.teamMember.count({
+        where: {
+          organizationId,
+        },
+      }),
+
+      db.teamMember.count({
+        where: {
+          organizationId,
+          custodies: {
+            some: {},
+          },
+        },
+      }),
+      db.customField.count({
+        where: {
+          organizationId,
+        },
+      }),
+    ]);
+
+    return {
+      hasAssets: assets.length > 0,
+      hasCategories: categoriesCount > 0,
+      hasTags: tagsCount > 0,
+      hasTeamMembers: teamMembersCount > 0,
+      hasCustodies: custodiesCount > 0,
+      hasCustomFields: customFieldsCount > 0,
+    };
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message:
+        "Something went wrong while loading checklist options. Please try again or contact support.",
+      additionalData: { organizationId },
+      label: "Dashboard",
+    });
+  }
 }

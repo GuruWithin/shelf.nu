@@ -1,5 +1,5 @@
-import { tw } from "~/utils";
 import { getDifferenceInSeconds } from "~/utils/date-fns";
+import { tw } from "~/utils/tw";
 
 const FORCE_RELOAD_WITHIN_SECONDS = 30;
 export const Image = ({
@@ -22,7 +22,7 @@ export const Image = ({
       src={
         imageId
           ? `/api/image/${imageId}${forceReload ? `?t=${Date.now()}` : ""}`
-          : `/images/asset-placeholder.jpg`
+          : `/static/images/asset-placeholder.jpg`
       }
       alt={alt}
       className={tw(className)}

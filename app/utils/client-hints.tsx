@@ -2,9 +2,10 @@
  * This file contains utilities for using client hints for user preference which
  * are needed by the server, but are only known by the browser.
  */
+import { parseISO } from "date-fns";
 import { parseAcceptLanguage } from "intl-parse-accept-language";
 import type { ClientHint } from "~/modules/booking/types";
-import { ShelfStackError } from "./error";
+import { ShelfError } from "./error";
 import { useRequestInfo } from "./request-info";
 
 export const clientHints = {
@@ -20,7 +21,11 @@ type ClientHintNames = keyof typeof clientHints;
 function getCookieValue(cookieString: string, name: ClientHintNames) {
   const hint = clientHints[name];
   if (!hint) {
-    throw new ShelfStackError({ message: `Unknown client hint: ${name}` });
+    throw new ShelfError({
+      cause: null,
+      message: `Unknown client hint: ${name}`,
+      label: "Dev error",
+    });
   }
   const value = cookieString
     .split(";")
@@ -173,4 +178,8 @@ export function getLocale(request: Request) {
   });
 
   return locales[0] ?? "en-US";
+}
+
+export function formatDateBasedOnLocaleOnly(value: string, locale: string) {
+  return parseISO(value).toLocaleDateString(locale);
 }

@@ -1,5 +1,5 @@
 import { useAtom } from "jotai";
-import { tw } from "~/utils";
+import { tw } from "~/utils/tw";
 import { toggleMobileNavAtom } from "./atoms";
 
 const Overlay = () => {
@@ -8,7 +8,7 @@ const Overlay = () => {
     <div
       onClick={toggleMobileNav}
       className={tw(
-        "size-screen fixed right-0 top-0 z-10 cursor-pointer bg-gray-25/10 backdrop-blur transition duration-300 ease-in-out md:hidden",
+        "fixed right-0 top-0 z-10 h-screen w-screen cursor-pointer bg-gray-25/10 backdrop-blur transition duration-300 ease-in-out md:hidden",
         isMobileNavOpen ? "visible" : "invisible opacity-0"
       )}
     ></div>

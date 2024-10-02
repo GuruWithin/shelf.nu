@@ -2,14 +2,15 @@ import {
   Button,
   Html,
   Text,
-  Img,
-  Section,
   Link,
   Head,
   render,
+  Container,
 } from "@react-email/components";
+import { config } from "~/config/shelf.config";
 import type { InviteWithInviterAndOrg } from "~/modules/invite/types";
 import { SERVER_URL } from "~/utils/env";
+import { LogoForEmail } from "./logo";
 import { styles } from "./styles";
 
 interface Props {
@@ -18,24 +19,19 @@ interface Props {
 }
 
 export function InvitationEmailTemplate({ invite, token }: Props) {
+  const { emailPrimaryColor } = config;
+
   return (
     <Html>
       <Head>
         <title>Invitation to join Shelf</title>
       </Head>
 
-      <Section style={{ padding: "56px" }}>
-        <Img
-          src="cid:shelf-logo"
-          alt="Shelf's logo"
-          width="100"
-          height="32"
-          style={{ marginBottom: "24px" }}
-        />
+      <Container style={{ padding: "32px 16px", maxWidth: "100%" }}>
+        <LogoForEmail />
+
         <div style={{ paddingTop: "8px" }}>
-          <Text
-            style={{ marginBottom: "24px", fontSize: "16px", color: "#344054" }}
-          >
+          <Text style={{ marginBottom: "24px", ...styles.p }}>
             Howdy,
             <br />
             {invite.inviter.firstName} {invite.inviter.lastName} invites you to
@@ -48,33 +44,35 @@ export function InvitationEmailTemplate({ invite, token }: Props) {
           >
             Accept the invite
           </Button>
-          <Text
-            style={{ marginBottom: "24px", fontSize: "16px", color: "#344054" }}
-          >
+          <Text style={{ ...styles.p, marginBottom: "24px" }}>
             Once you’re done setting up your account, you'll be able to access
             the workspace and start exploring features like Asset Explorer,
             Location Tracking, Collaboration, Custom fields and more. If you
             have any questions or need assistance, please don't hesitate to
             contact our support team at{" "}
-            <Link style={{ color: "#EF6820" }} href="mailto:support@shelf.nu">
+            <Link
+              style={{ color: emailPrimaryColor }}
+              href="mailto:support@shelf.nu"
+            >
               support@shelf.nu
             </Link>
             .
           </Text>
-          <Text
-            style={{ marginBottom: "32px", fontSize: "16px", color: "#344054" }}
-          >
+          <Text style={{ marginBottom: "32px", ...styles.p }}>
             Thanks, <br />
             The Shelf team
           </Text>
           <Text style={{ fontSize: "14px", color: "#344054" }}>
             This is an automatic email sent from{" "}
-            <Link style={{ color: "#EF6820" }} href="https://www.shelf.nu/">
+            <Link
+              style={{ color: emailPrimaryColor }}
+              href="https://www.shelf.nu/"
+            >
               shelf.nu
             </Link>{" "}
             to{" "}
             <Link
-              style={{ color: "#EF6820" }}
+              style={{ color: emailPrimaryColor }}
               href={`mailto:${invite.inviteeEmail}`}
             >
               {invite.inviteeEmail}
@@ -82,10 +80,14 @@ export function InvitationEmailTemplate({ invite, token }: Props) {
             .
           </Text>
         </div>
-      </Section>
+      </Container>
     </Html>
   );
 }
 
+/*
+ *The HTML content of an email will be accessed by a server file to send email,
+  we cannot import a TSX component in a server file so we are exporting TSX converted to HTML string using render function by react-email.
+ */
 export const invitationTemplateString = ({ token, invite }: Props) =>
   render(<InvitationEmailTemplate token={token} invite={invite} />);

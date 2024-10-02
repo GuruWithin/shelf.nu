@@ -6,107 +6,144 @@ import type {
 } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { Link, Outlet } from "@remix-run/react";
-import { ErrorBoundryComponent } from "~/components/errors";
+import { z } from "zod";
+import { ErrorContent } from "~/components/errors";
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
-import { Filters, List } from "~/components/list";
+import LineBreakText from "~/components/layout/line-break-text";
+import { List } from "~/components/list";
+import { ListContentWrapper } from "~/components/list/content-wrapper";
+import { Filters } from "~/components/list/filters";
 import { Button } from "~/components/shared/button";
 import { Tag as TagBadge } from "~/components/shared/tag";
 import { Th, Td } from "~/components/table";
+import BulkActionsDropdown from "~/components/tag/bulk-actions-dropdown";
 import { DeleteTag } from "~/components/tag/delete-tag";
 
-import { deleteTag, getTags } from "~/modules/tag";
+import { deleteTag, getTags } from "~/modules/tag/service.server";
+import { appendToMetaTitle } from "~/utils/append-to-meta-title";
+import {
+  setCookie,
+  updateCookieWithPerPage,
+  userPrefs,
+} from "~/utils/cookies.server";
+import { sendNotification } from "~/utils/emitter/send-notification.server";
+import { makeShelfError } from "~/utils/error";
 import {
   assertIsDelete,
-  generatePageMeta,
+  data,
+  error,
   getCurrentSearchParams,
-  getParamsValues,
-} from "~/utils";
-import { appendToMetaTitle } from "~/utils/append-to-meta-title";
-import { updateCookieWithPerPage, userPrefs } from "~/utils/cookies.server";
-import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
-import { requirePermision } from "~/utils/roles.server";
+  parseData,
+} from "~/utils/http.server";
+import { getParamsValues } from "~/utils/list";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.data";
+import { requirePermission } from "~/utils/roles.server";
 
-export async function loader({ request }: LoaderFunctionArgs) {
-  const { organizationId } = await requirePermision(
-    request,
-    PermissionEntity.tag,
-    PermissionAction.read
-  );
+export async function loader({ context, request }: LoaderFunctionArgs) {
+  const authSession = context.getSession();
+  const { userId } = authSession;
 
-  const searchParams = getCurrentSearchParams(request);
-  const { page, perPageParam, search } = getParamsValues(searchParams);
-  const cookie = await updateCookieWithPerPage(request, perPageParam);
-  const { perPage } = cookie;
-  const { prev, next } = generatePageMeta(request);
-  const { tags, totalTags } = await getTags({
-    organizationId,
-    page,
-    perPage,
-    search,
-  });
-  const totalPages = Math.ceil(totalTags / perPage);
+  try {
+    const { organizationId } = await requirePermission({
+      userId: authSession.userId,
+      request,
+      entity: PermissionEntity.tag,
+      action: PermissionAction.read,
+    });
 
-  const header: HeaderData = {
-    title: "Tags",
-  };
-  const modelName = {
-    singular: "tag",
-    plural: "tags",
-  };
-  return json(
-    {
-      header,
-      items: tags,
-      search,
+    const searchParams = getCurrentSearchParams(request);
+    const { page, perPageParam, search } = getParamsValues(searchParams);
+    const cookie = await updateCookieWithPerPage(request, perPageParam);
+    const { perPage } = cookie;
+    const { tags, totalTags } = await getTags({
+      organizationId,
       page,
-      totalItems: totalTags,
-      totalPages,
       perPage,
-      prev,
-      next,
-      modelName,
-    },
-    {
-      headers: {
-        "Set-Cookie": await userPrefs.serialize(cookie),
-      },
-    }
-  );
+      search,
+    });
+    const totalPages = Math.ceil(totalTags / perPage);
+
+    const header: HeaderData = {
+      title: "Tags",
+    };
+    const modelName = {
+      singular: "tag",
+      plural: "tags",
+    };
+
+    return json(
+      data({
+        header,
+        items: tags,
+        search,
+        page,
+        totalItems: totalTags,
+        totalPages,
+        perPage,
+        modelName,
+      }),
+      {
+        headers: [setCookie(await userPrefs.serialize(cookie))],
+      }
+    );
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId });
+    throw json(error(reason), { status: reason.status });
+  }
 }
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => [
   { title: data ? appendToMetaTitle(data.header.title) : "" },
 ];
 
-export async function action({ request }: ActionFunctionArgs) {
-  const { authSession, organizationId } = await requirePermision(
-    request,
-    PermissionEntity.tag,
-    PermissionAction.delete
-  );
+export async function action({ context, request }: ActionFunctionArgs) {
+  const authSession = context.getSession();
   const { userId } = authSession;
 
-  assertIsDelete(request);
-  const formData = await request.formData();
-  const id = formData.get("id") as string;
+  try {
+    assertIsDelete(request);
 
-  await deleteTag({ id, organizationId });
-  sendNotification({
-    title: "Tag deleted",
-    message: "Your tag has been deleted successfully",
-    icon: { name: "trash", variant: "error" },
-    senderId: userId,
-  });
+    const { organizationId } = await requirePermission({
+      userId,
+      request,
+      entity: PermissionEntity.tag,
+      action: PermissionAction.delete,
+    });
 
-  return json({ success: true });
+    const { id } = parseData(
+      await request.formData(),
+      z.object({
+        id: z.string(),
+      }),
+      {
+        additionalData: { userId },
+      }
+    );
+
+    await deleteTag({ id, organizationId });
+
+    sendNotification({
+      title: "Tag deleted",
+      message: "Your tag has been deleted successfully",
+      icon: { name: "trash", variant: "error" },
+      senderId: userId,
+    });
+
+    return json(data({ success: true }));
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId });
+    return json(error(reason), { status: reason.status });
+  }
 }
 
 export const handle = {
   breadcrumb: () => <Link to="/tags">Tags</Link>,
 };
-export const ErrorBoundary = () => <ErrorBoundryComponent />;
+export const ErrorBoundary = () => <ErrorContent />;
 
 export default function CategoriesPage() {
   return (
@@ -122,10 +159,11 @@ export default function CategoriesPage() {
           New tag
         </Button>
       </Header>
-      <div className="mt-8 flex flex-1 flex-col gap-2">
+      <ListContentWrapper>
         <Filters />
         <Outlet />
         <List
+          bulkActions={<BulkActionsDropdown />}
           ItemComponent={TagItem}
           headerChildren={
             <>
@@ -134,7 +172,7 @@ export default function CategoriesPage() {
             </>
           }
         />
-      </div>
+      </ListContentWrapper>
     </>
   );
 }
@@ -148,8 +186,15 @@ const TagItem = ({
     <Td className="w-1/4 text-left" title={`Tag: ${item.name}`}>
       <TagBadge>{item.name}</TagBadge>
     </Td>
-    <Td className="w-3/4 text-gray-500" title="Description">
-      {item.description}
+    <Td className="max-w-62 md:w-3/4">
+      {item.description ? (
+        <LineBreakText
+          className="md:w-3/4"
+          text={item.description}
+          numberOfLines={3}
+          charactersPerLine={60}
+        />
+      ) : null}
     </Td>
     <Td className="text-left">
       <Button

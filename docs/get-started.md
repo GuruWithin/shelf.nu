@@ -8,7 +8,7 @@ Shelf's basic setup is based on a Remix stack by [rphlmr](https://github.com/rph
 - Production-ready [Supabase Database](https://supabase.com/)
 - Healthcheck endpoint for [Fly backups region fallbacks](https://fly.io/docs/reference/configuration/#services-http_checks)
 - [GitHub Actions](https://github.com/features/actions) to deploy on merge to production and staging environments
-- Email/Password Authentication / Magic Link, with [cookie-based sessions](https://remix.run/docs/en/v1/api/remix#createcookiesessionstorage)
+- Email/Password Authentication / OTP, with [cookie-based sessions](https://remix.run/docs/en/v1/api/remix#createcookiesessionstorage)
 - Database ORM with [Prisma](https://prisma.io)
 - Forms Schema (client and server sides !) validation with [Remix Params Helper](https://github.com/kiliman/remix-params-helper)
 - Styling with [Tailwind](https://tailwindcss.com/)
@@ -18,6 +18,13 @@ Shelf's basic setup is based on a Remix stack by [rphlmr](https://github.com/rph
 - Code formatting with [Prettier](https://prettier.io)
 - Linting with [ESLint](https://eslint.org)
 - Static Types with [TypeScript](https://typescriptlang.org)
+
+## Docker
+
+If you prefer to run shelf locally or host your live app via docker, please check our [Docker](./docker.md) documentation.
+
+> [!NOTE]
+> Currently we dont have a docker setup that also includes self hositng supabase. Once released the docker documentation will be updated to include it as well.
 
 ## Development
 
@@ -34,13 +41,14 @@ Shelf's basic setup is based on a Remix stack by [rphlmr](https://github.com/rph
 - Go to https://app.supabase.io/project/{PROJECT}/settings/api to find your secrets
 - "Project API keys"
 - Add your `MAPTILER_TOKEN`, `SUPABASE_URL`, `SERVER_URL`, `SUPABASE_SERVICE_ROLE` (aka `service_role` `secret`), `SUPABASE_ANON_PUBLIC` (aka `anon` `public`) and `DATABASE_URL` in the `.env` file
-  > **Note:** `SERVER_URL` is your localhost on dev. It'll work for magic link login
+  > **Note:** `SERVER_URL` is your localhost on dev.
+- Make sure to set the database connection mode in Supabase to "transaction"
 
 ```shell
 # Most of the connection information can be found within the Supabase dashboard. Navigate to your project > Project Settings > Database.
 # There you will be able to find the values you need to use below
 # You can either copy the connection string and insert your password or use the connection parameters to build the string yourself
-DATABASE_URL="postgres://{USER}:{PASSWORD}@{HOST}:6543/{DB_NAME}?pgbouncer=true&connection_limit=1"
+DATABASE_URL="postgres://{USER}:{PASSWORD}@{HOST}:6543/{DB_NAME}?pgbouncer=true"
 
 # Direct URL is used by prisma to run migrations. Depending on how you run your migrations, you could skip this in your procution environment
 # More info here: https://www.prisma.io/docs/orm/prisma-client/setup-and-configuration/databases-connections#external-connection-poolers
@@ -53,11 +61,16 @@ SUPABASE_URL="https://{STAGING_YOUR_INSTANCE_NAME}.supabase.co"
 SESSION_SECRET="super-duper-s3cret"
 SERVER_URL="http://localhost:3000"
 
+# Used for generating cuid with lowered chance of collision. Optional
+FINGERPRINT="a-custom-host-fingerprint"
+
 SMTP_HOST="smtp.yourhost.com"
 SMTP_USER="you@example.com"
 SMTP_PWD="yourSMTPpassword"
+SMTP_FROM="You from example.com" <you@example.com>
 
 # Set this to false to disable requirement of subscription for premium features. This will make premium features available for all users
+# You can also directly adjust this in remix.config.js and set it to false
 ENABLE_PREMIUM_FEATURES="true"
 
 # The Stripe keys are needed only if you want to enable premium features
@@ -92,17 +105,17 @@ GEOCODE_API_KEY="geocode-api-key"
 
 This starts your app in development mode, rebuilding assets on file changes.
 
-The database seed script creates a new user with some data you can use to get started:
+> [!CAUTION]
+> During development involving Dockerfile changes, make sure to **address the correct file** in your builds:
+>
+> - Fly.io will be built via `Dockerfile`
+> - ghcr.io will be built via `Dockerfile.image`
 
-- Email: `hello@supabase.com`
-- Password: `supabase`
+## Authentication
 
-### Relevant code:
+For authentication to work in your Project, you need so setup some settings related to One Time Passwords in Supabase.
 
-This is a pretty simple note-taking app, but it's a good example of how you can build a full-stack app with Prisma, Supabase, and Remix. The main functionality is creating users, logging in and out (handling access and refresh tokens + refresh on expiration), and creating and deleting notes.
-
-- auth / session [./app/modules/auth](./app/modules/auth)
-- creating, and deleting notes [./app/modules/note](./app/modules/note)
+In order for OTP to work you need to make your OTP emails. Go to your Supabase dashboard, select your project and navigate to `Authentication > Email Templates`. Replace the `{{ .ConfirmationURL }}` with `{{ .Token }}`. This will make sure that Supabase sends your Users a one time password instead of a magic link. You need to do this both for "Confirm signup" and "Magic link".
 
 ## Deployment
 
@@ -162,10 +175,12 @@ Prior to your first deployment, you'll need to do a few things:
   fly secrets set DATABASE_URL="postgres://{USER}:{PASSWORD}@{HOST}:6543/{DB_NAME}?pgbouncer=true&connection_limit=1"
   fly secrets set SERVER_URL="https://{YOUR_STAGING_SERVEUR_URL}"
   fly secrets set MAPTILER_TOKEN="{YOUR_MAPTILER_TOKEN}"
+  fly secrets set FINGERPRINT=$(openssl rand -hex 32)
 
   fly secrets set SMTP_HOST="smtp.yourhost.com"
   fly secrets set SMTP_USER="you@example.com"
   fly secrets set SMTP_PWD="yourSMTPpassword"
+  fly secrets set SMTP_FROM="Carlos from shelf.nu" <carlos@shelf.nu>
 
 
   # staging (specify --app name) ** not mandatory if you don't want a staging environnement **
@@ -198,6 +213,11 @@ For File storage we use the S3 buckets service provided by supabase. We do this 
 
 1. Create a bucket called `assets`
 2. Implement a policy for `SELECT`, `INSERT`, `UPDATE` & `DELETE`. The policy expression is: `((bucket_id = 'assets'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text))` and target roles should be set to `authenticated`
+
+### Kits
+
+1. Create a bucket called `kits`
+2. Implement a policy for `SELECT`, `INSERT`, `UPDATE` & `DELETE`. The policy expression is: `((bucket_id = 'kits'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text))` and target roles should be set to `authenticated`
 
 ## GitHub Actions
 
@@ -268,24 +288,22 @@ Using Supabase SDK server side to query your database (for those using RLS featu
 
 In my benchmark, it makes my pages twice slower. (~+200ms compared to a direct query with Prisma)
 
-## Supabase login with magic link
+## Supabase url configuration
 
-In order to make the register/login with magic link work, you will need to add some configuration to your Supabase.
-You need to add the site url as well as the redirect urls of your local, test and live app that will be used for oauth
+In order to make the reset password work, you will need to add some configuration to your Supabase.
+You need to add the site url as well as the redirect urls of your local, test and live app that will be used for resetting password.
 To do that navigate to Authentication > URL configuration and add the following values:
 
-- https://localhost:3000/oauth/callback
 - https://localhost:3000/reset-password
 
-- https://staging-domain.com/oauth/callback
 - https://staging-domain.com/reset-password
 
-- https://live-domain.com/oauth/callback
 - https://live-domain.com/reset-password
 
 ## Premium
 
-Shelf hosted version has some premium features that are locked behind different tiers of subscriptions. By default those features are disabled. To enable them add the env variable:
+Shelf hosted version has some premium features that are locked behind different tiers of subscriptions. By default those features are disabled. To enable them add the env variable.
+Moreover if you don't have different servers and environments, you can directly adjust the value in shelf.config.ts
 
 ```
 ENABLE_PREMIUM_FEATURES="true"

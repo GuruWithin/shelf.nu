@@ -1,10 +1,10 @@
 import type { User } from "@prisma/client";
 import { atom } from "jotai";
-import type { Icon } from "~/components/shared/icons-map";
+import type { IconType } from "~/components/shared/icons-map";
 
 export type NotificationVariant = "primary" | "gray" | "success" | "error";
 export type NotificationIcon = {
-  name: Icon;
+  name: IconType;
   variant: NotificationVariant;
   className?: string;
 };
@@ -12,7 +12,7 @@ export type NotificationIcon = {
 export interface NotificationType {
   open: boolean;
   title: string;
-  message: string;
+  message?: string | null;
   icon: NotificationIcon;
   time?: number;
   senderId: User["id"] | null;

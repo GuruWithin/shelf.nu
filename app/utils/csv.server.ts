@@ -4,21 +4,45 @@ import {
   unstable_createMemoryUploadHandler,
   unstable_parseMultipartFormData,
 } from "@remix-run/node";
-import { parse } from "csv-parse";
-import { fetchAssetsForExport } from "~/modules/asset";
+import chardet from "chardet";
+import { CsvError, parse } from "csv-parse";
+import iconv from "iconv-lite";
+import { fetchAssetsForExport } from "~/modules/asset/service.server";
+import { isLikeShelfError, ShelfError } from "./error";
 
 export type CSVData = [string[], ...string[][]] | [];
 
+/** Guesses the delimiter of csv based on the most common delimiter found in the file */
+function guessDelimiters(csv: string, delimiters: string[]) {
+  const delimiterCounts = delimiters.map(
+    (delimiter) => csv.split(delimiter).length
+  );
+
+  const max = Math.max(...delimiterCounts);
+
+  const delimiter = delimiters[delimiterCounts.indexOf(max)];
+  return delimiter;
+}
+
 /** Parses csv Data into an array with type {@link CSVData} */
-export const parseCsv = (csvData: string) => {
+export const parseCsv = (csvData: ArrayBuffer) => {
   const results = [] as CSVData;
+  /** Detect the file encoding */
+  const encoding = chardet.detect(Buffer.from(csvData));
+
+  /** Convert the file to utf-8 from the detected encoding */
+  const csv = iconv.decode(Buffer.from(csvData), encoding || "utf-8");
+  const delimiter = guessDelimiters(csv, [",", ";"]);
+
   return new Promise((resolve, reject) => {
     const parser = parse({
-      delimiter: ";", // Set delimiter to ; as this allows for commas in the data
-      // quote: '"', // Set quote to " as this allows for commas in the data
-      escape: "\\", // Set escape to \ as this allows for commas in the data
+      encoding: "utf-8", // Set encoding to utf-8
+      delimiter, // Set delimiter
+      bom: true, // Handle BOM
+      quote: '"', // Set quote to " as this allows for commas in the data
+      escape: '"', // Set escape to \ as this allows for commas in the data
       ltrim: true, // Trim whitespace from left side of cell
-      relax_quotes: true, // Allow quotes to be ignored if the character inside the quotes is not a quote
+      relax_column_count: true, // Ignore inconsistent column count
     })
       .on("data", (data) => {
         // Process each row of data as it is parsed
@@ -32,23 +56,35 @@ export const parseCsv = (csvData: string) => {
         resolve(results);
       });
 
-    parser.write(csvData);
+    parser.write(csv);
     parser.end();
   });
 };
 
 /** Takes a request object and extracts the file from it and parses it as csvData */
 export const csvDataFromRequest = async ({ request }: { request: Request }) => {
-  // Upload handler to store file in memory
-  const formData = await unstable_parseMultipartFormData(
-    request,
-    memoryUploadHandler
-  );
+  try {
+    // Upload handler to store file in memory
+    const formData = await unstable_parseMultipartFormData(
+      request,
+      memoryUploadHandler
+    );
 
-  const csvFile = formData.get("file") as File;
-  const csvData = Buffer.from(await csvFile.arrayBuffer()).toString("utf-8"); // Convert Uint8Array to string
+    const csvFile = formData.get("file") as File;
 
-  return (await parseCsv(csvData)) as CSVData;
+    const csvData = await csvFile.arrayBuffer();
+
+    return (await parseCsv(csvData)) as CSVData;
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message:
+        cause instanceof CsvError
+          ? cause.message
+          : "Something went wrong while parsing the CSV file.",
+      label: "CSV",
+    });
+  }
 };
 
 export const memoryUploadHandler = unstable_composeUploadHandlers(
@@ -61,8 +97,9 @@ export const buildCsvDataFromAssets = ({
 }: {
   assets: Asset[];
   keysToSkip: string[];
-}) =>
-  assets.map((asset) => {
+}) => {
+  if (!assets.length) return [] as unknown as CSVData;
+  return assets.map((asset) => {
     const toExport: string[] = [];
 
     /** Itterate over the values to create teh export object */
@@ -114,6 +151,7 @@ export const buildCsvDataFromAssets = ({
 
     return toExport;
   });
+};
 
 /* There are some keys that need to be skipped and require special handling */
 const keysToSkip = [
@@ -131,27 +169,48 @@ export async function exportAssetsToCsv({
 }: {
   organizationId: string;
 }) {
-  const assets = await fetchAssetsForExport({ organizationId });
+  try {
+    const assets = await fetchAssetsForExport({ organizationId });
 
-  const csvData = buildCsvDataFromAssets({
-    assets,
-    keysToSkip,
-  });
+    const csvData = buildCsvDataFromAssets({
+      assets,
+      keysToSkip,
+    });
 
-  if (!csvData) return null;
-  /** Get the headers from the first row and filter out the keys to skip */
-  const headers = Object.keys(assets[0]).filter(
-    (header) => !keysToSkip.includes(header)
-  );
+    if (!csvData || !csvData.length) {
+      throw new ShelfError({
+        cause: null,
+        title: "No assets to export",
+        message:
+          "Your workspace doesn't have any assets so there is nothing to export.",
+        label: "CSV",
+        shouldBeCaptured: false,
+      });
+    }
 
-  /** Add the header column */
-  csvData.unshift(headers);
+    /** Get the headers from the first row and filter out the keys to skip */
+    const headers = Object.keys(assets[0]).filter(
+      (header) => !keysToSkip.includes(header)
+    );
 
-  /** Convert the data to a string */
-  const csvRows = csvData.map((row) => row.join(";"));
+    /** Add the header column */
+    csvData.unshift(headers);
 
-  /** Join the rows with a new line */
-  const csvString = csvRows.join("\n");
+    /** Convert the data to a string */
+    const csvRows = csvData.map((row) => row.join(";"));
 
-  return csvString;
+    /** Join the rows with a new line */
+    const csvString = csvRows.join("\n");
+
+    return csvString;
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message: isLikeShelfError(cause)
+        ? cause.message
+        : "Something went wrong while exporting the assets.",
+      additionalData: { organizationId },
+      label: "CSV",
+    });
+  }
 }

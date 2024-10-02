@@ -1,20 +1,24 @@
 import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
-import { Form, useActionData, useNavigation } from "@remix-run/react";
-import { parseFormAny, useZorm } from "react-zorm";
+import { useActionData, useNavigation } from "@remix-run/react";
+import { useZorm } from "react-zorm";
 import { z } from "zod";
+import { Form } from "~/components/custom-form";
 import Input from "~/components/forms/input";
 
 import { Button } from "~/components/shared/button";
 
-import { commitAuthSession } from "~/modules/auth";
-import { createTag } from "~/modules/tag";
-import { assertIsPost, isFormProcessing } from "~/utils";
+import { createTag } from "~/modules/tag/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
-import { setCookie } from "~/utils/cookies.server";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
-import { requirePermision } from "~/utils/roles.server";
+import { makeShelfError } from "~/utils/error";
+import { isFormProcessing } from "~/utils/form";
+import { assertIsPost, data, error, parseData } from "~/utils/http.server";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.data";
+import { requirePermission } from "~/utils/roles.server";
 import { zodFieldIsRequired } from "~/utils/zod";
 
 export const NewTagFormSchema = z.object({
@@ -24,71 +28,69 @@ export const NewTagFormSchema = z.object({
 
 const title = "New Tag";
 
-export async function loader({ request }: LoaderFunctionArgs) {
-  await requirePermision(
-    request,
-    PermissionEntity.tag,
-    PermissionAction.create
-  );
+export async function loader({ context, request }: LoaderFunctionArgs) {
+  const authSession = context.getSession();
+  const { userId } = authSession;
 
-  const header = {
-    title,
-  };
+  try {
+    await requirePermission({
+      userId: authSession.userId,
+      request,
+      entity: PermissionEntity.tag,
+      action: PermissionAction.create,
+    });
 
-  return json({ header });
+    const header = {
+      title,
+    };
+
+    return json(data({ header }));
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId });
+    throw json(error(reason), { status: reason.status });
+  }
 }
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => [
   { title: data ? appendToMetaTitle(data.header.title) : "" },
 ];
 
-export async function action({ request }: LoaderFunctionArgs) {
-  const { authSession, organizationId } = await requirePermision(
-    request,
-    PermissionEntity.tag,
-    PermissionAction.create
-  );
-  assertIsPost(request);
-  const formData = await request.formData();
-  const result = await NewTagFormSchema.safeParseAsync(parseFormAny(formData));
+export async function action({ context, request }: LoaderFunctionArgs) {
+  const authSession = context.getSession();
+  const { userId } = authSession;
 
-  if (!result.success) {
-    return json(
-      {
-        errors: result.error,
-      },
-      { status: 400 }
-    );
+  try {
+    assertIsPost(request);
+
+    const { organizationId } = await requirePermission({
+      userId: authSession.userId,
+      request,
+      entity: PermissionEntity.tag,
+      action: PermissionAction.create,
+    });
+
+    const payload = parseData(await request.formData(), NewTagFormSchema, {
+      additionalData: { userId, organizationId },
+    });
+
+    await createTag({
+      ...payload,
+      userId: authSession.userId,
+      organizationId,
+    });
+
+    sendNotification({
+      title: "Tag created",
+      message: "Your tag has been created successfully",
+      icon: { name: "success", variant: "success" },
+      senderId: authSession.userId,
+    });
+
+    return redirect(`/tags`);
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId });
+    return json(error(reason), { status: reason.status });
   }
-
-  const rsp = await createTag({
-    ...result.data,
-    userId: authSession.userId,
-    organizationId,
-  });
-
-  if (rsp?.error) {
-    return json(
-      {
-        errors: rsp.error,
-      },
-      {
-        status: 400,
-        headers: [setCookie(await commitAuthSession(request, { authSession }))],
-      }
-    );
-  }
-
-  sendNotification({
-    title: "Tag created",
-    message: "Your tag has been created successfully",
-    icon: { name: "success", variant: "success" },
-    senderId: authSession.userId,
-  });
-
-  return redirect(`/tags`, {
-    headers: [setCookie(await commitAuthSession(request, { authSession }))],
-  });
 }
 
 export default function NewTag() {
@@ -138,9 +140,9 @@ export default function NewTag() {
           </div>
         </div>
 
-        {actionData?.errors ? (
+        {actionData?.error ? (
           <div className="mt-3 text-sm text-error-500">
-            {actionData?.errors.message}
+            {actionData?.error.message}
           </div>
         ) : null}
       </Form>

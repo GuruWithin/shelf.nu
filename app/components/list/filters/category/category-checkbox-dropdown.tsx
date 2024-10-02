@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Category } from "@prisma/client";
-import { useSearchParams } from "@remix-run/react";
+
 import { useAtom, useAtomValue } from "jotai";
 
 import { CategorySelectNoCategories } from "~/components/category/category-select-no-categories";
 
+import { Badge } from "~/components/shared/badge";
+import { Button } from "~/components/shared/button";
+import { useSearchParams } from "~/hooks/search-params";
 import type { WithDateFields } from "~/modules/types";
 import { useCategorySearch } from "../../../category/useCategorySearch";
 import Input from "../../../forms/input";
-import { CheckIcon, ChevronRight } from "../../../icons";
-
-import { Badge, Button } from "../../../shared";
+import { CheckIcon, ChevronRight } from "../../../icons/library";
 
 import {
   DropdownMenu,
@@ -23,7 +24,7 @@ import {
   clearCategoryFiltersAtom,
   selectedCategoriesAtom,
   toggleIsFilteringCategoriesAtom,
-} from "../atoms";
+} from "../atoms/category";
 
 export const CategoryCheckboxDropdown = () => {
   const [params] = useSearchParams();
@@ -168,7 +169,7 @@ const CheckboxItem = ({
     <label
       key={category.id}
       htmlFor={category.name}
-      className="relative flex cursor-default select-none items-center rounded-lg px-2 py-1.5 text-sm font-medium outline-none focus:bg-gray-100 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 hover:bg-gray-100 "
+      className="relative flex cursor-default select-none items-center rounded px-2 py-1.5 text-sm font-medium outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 hover:bg-gray-100 focus:bg-gray-100 "
     >
       <Badge color={category.color} withDot={false} noBg>
         {category.name}

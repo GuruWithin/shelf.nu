@@ -1,125 +1,124 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 
 import { json, redirect } from "@remix-run/node";
-import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
-import { useActionData, useFetcher, useSearchParams } from "@remix-run/react";
-import { parseFormAny } from "react-zorm";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import { useFetcher } from "@remix-run/react";
 import { z } from "zod";
-
-import { Button } from "~/components/shared";
+import { Button } from "~/components/shared/button";
 import { Spinner } from "~/components/shared/spinner";
-import { supabaseClient } from "~/integrations/supabase";
-import {
-  refreshAccessToken,
-  commitAuthSession,
-  getAuthSession,
-} from "~/modules/auth";
-import { getOrganizationByUserId } from "~/modules/organization";
+import { config } from "~/config/shelf.config";
+import { useSearchParams } from "~/hooks/search-params";
+import { supabaseClient } from "~/integrations/supabase/client";
+import { refreshAccessToken } from "~/modules/auth/service.server";
 import { setSelectedOrganizationIdCookie } from "~/modules/organization/context.server";
-import { tryCreateUser, getUserByEmail } from "~/modules/user";
-import { assertIsPost, randomUsernameFromEmail, safeRedirect } from "~/utils";
 import { setCookie } from "~/utils/cookies.server";
+import { makeShelfError, notAllowedMethod, ShelfError } from "~/utils/error";
+import {
+  data,
+  error,
+  getActionMethod,
+  parseData,
+  safeRedirect,
+} from "~/utils/http.server";
+import { resolveUserAndOrgForSsoCallback } from "~/utils/sso.server";
+import { stringToJSONSchema } from "~/utils/zod";
 
-// imagine a user go back after OAuth login success or type this URL
-// we don't want him to fall in a black hole 👽
-export async function loader({ request }: LoaderFunctionArgs) {
-  const authSession = await getAuthSession(request);
+export async function action({ request, context }: ActionFunctionArgs) {
+  const { disableSSO } = config;
+  try {
+    /**
+     * Currently the only reason to use oauth/callback is for SSO reasons.
+     * Once we start adding social login providers, this will need to be adjusted
+     */
+    if (disableSSO) {
+      throw new ShelfError({
+        cause: null,
+        title: "SSO is disabled",
+        message:
+          "For more information, please contact your workspace administrator.",
+        label: "User onboarding",
+        status: 403,
+        shouldBeCaptured: false,
+      });
+    }
 
-  if (authSession) return redirect("/");
+    const method = getActionMethod(request);
 
-  return json({});
-}
+    switch (method) {
+      case "POST": {
+        const { refreshToken, redirectTo, firstName, lastName, groups } =
+          parseData(
+            await request.formData(),
+            z.object({
+              firstName: z.string().min(1),
+              lastName: z.string().min(1),
+              groups: stringToJSONSchema.pipe(
+                z
+                  .array(z.string())
+                  .nonempty(
+                    "User doesn't belong to any group. Groups are required for assigning the correct workspaces and permissions."
+                  )
+              ),
+              refreshToken: z.string().min(1),
+              redirectTo: z.string().optional(),
+            })
+          );
 
-export async function action({ request }: ActionFunctionArgs) {
-  assertIsPost(request);
+        // We should not trust what is sent from the client
+        // https://github.com/rphlmr/supa-fly-stack/issues/45
+        const authSession = await refreshAccessToken(refreshToken);
 
-  const formData = await request.formData();
-  const result = await z
-    .object({
-      refreshToken: z.string(),
-      redirectTo: z.string().optional(),
-    })
-    .safeParseAsync(parseFormAny(formData));
-
-  if (!result.success) {
-    return json(
-      {
-        message: "invalid-request",
-      },
-      { status: 400 }
-    );
-  }
-
-  const { redirectTo, refreshToken } = result.data;
-  const safeRedirectTo = safeRedirect(redirectTo, "/");
-
-  // We should not trust what is sent from the client
-  // https://github.com/rphlmr/supa-fly-stack/issues/45
-  const authSession = await refreshAccessToken(refreshToken);
-
-  if (!authSession) {
-    return json(
-      {
-        message: "invalid-refresh-token",
-      },
-      { status: 401 }
-    );
-  }
-
-  // user have an account, skip creation part and just commit session
-  if (await getUserByEmail(authSession.email)) {
-    const personalOrganization = await getOrganizationByUserId({
-      userId: authSession.userId,
-      orgType: "PERSONAL",
-    });
-
-    return redirect(safeRedirectTo, {
-      headers: [
-        setCookie(
-          await setSelectedOrganizationIdCookie(personalOrganization.id)
-        ),
-        setCookie(
-          await commitAuthSession(request, {
-            authSession,
-          })
-        ),
-      ],
-    });
-  }
-  const username = randomUsernameFromEmail(authSession.email);
-
-  // first time sign in, let's create a brand-new User row in supabase
-  const user = await tryCreateUser({ ...authSession, username });
-
-  if (!user) {
-    return json(
-      {
-        message: "create-user-error",
-      },
-      { status: 500 }
-    );
-  }
-
-  const personalOrganization = user.organizations[0];
-
-  return redirect(safeRedirectTo, {
-    headers: [
-      setCookie(await setSelectedOrganizationIdCookie(personalOrganization.id)),
-      setCookie(
-        await commitAuthSession(request, {
+        /**
+         * This resolves the correct org we should redirec the user to
+         * Also it handles:
+         * - Creating a new user if the user doesn't exist
+         * - Throwing an error if the user is already connected to an email account
+         * - Linking the user to the correct org
+         */
+        const { org } = await resolveUserAndOrgForSsoCallback({
           authSession,
-        })
-      ),
-    ],
-  });
+          firstName,
+          lastName,
+          groups,
+        });
+        // Set the auth session and redirect to the assets page
+        context.setSession(authSession);
+
+        return redirect(
+          safeRedirect(redirectTo || "/assets"),
+          org?.id
+            ? {
+                headers: [
+                  setCookie(await setSelectedOrganizationIdCookie(org?.id)),
+                ],
+              }
+            : {}
+        );
+      }
+    }
+
+    throw notAllowedMethod(method);
+  } catch (cause) {
+    const reason = makeShelfError(cause);
+    return json(error(reason), { status: reason.status });
+  }
 }
 
+export function loader({ context }: LoaderFunctionArgs) {
+  const title = "Signing in via SSO";
+  const subHeading = "Please wait while we connect your account";
+
+  if (context.isAuthenticated) {
+    return redirect("/assets");
+  }
+
+  return json(data({ title, subHeading }));
+}
 export default function LoginCallback() {
-  const error = useActionData<typeof action>();
-  const [clientError, setClientError] = useState("");
-  const fetcher = useFetcher();
+  const fetcher = useFetcher<typeof action>();
+  const { data } = fetcher;
   const [searchParams] = useSearchParams();
-  const redirectTo = searchParams.get("redirectTo") ?? "/";
+  const redirectTo = searchParams.get("redirectTo") ?? "/assets";
 
   useEffect(() => {
     const {
@@ -133,8 +132,8 @@ export default function LoginCallback() {
 
         // we should not trust what's happen client side
         // so, we only pick the refresh token, and let's back-end getting user session from it
-
         const refreshToken = supabaseSession?.refresh_token;
+        const user = supabaseSession?.user;
 
         if (!refreshToken) return;
 
@@ -142,6 +141,17 @@ export default function LoginCallback() {
 
         formData.append("refreshToken", refreshToken);
         formData.append("redirectTo", redirectTo);
+        formData.append(
+          "firstName",
+          user?.user_metadata?.custom_claims.firstName || ""
+        );
+        formData.append(
+          "lastName",
+          user?.user_metadata?.custom_claims.lastName || ""
+        );
+
+        const groups = user?.user_metadata?.custom_claims.groups || [];
+        formData.append("groups", JSON.stringify(groups));
 
         fetcher.submit(formData, { method: "post" });
       }
@@ -153,38 +163,33 @@ export default function LoginCallback() {
     };
   }, [fetcher, redirectTo]);
 
-  useEffect(() => {
-    if (window?.location?.hash) {
-      /**
-       * We check the hash fragment of the url as this is what suaabase uses to return an error
-       * If it exists, we update the clientError state with it
-       * */
-      const parsedHash = new URLSearchParams(window.location.hash.substring(1));
+  const validationErrors = useMemo(
+    () => data?.error?.additionalData?.validationErrors,
+    [data?.error]
+  );
 
-      const error = parsedHash.get("error_description");
-
-      if (error && error !== "") {
-        setClientError(() => error);
-      }
-    }
-  }, []);
-
-  if (error) return <div className="text-center">{error.message}</div>;
-  if (clientError)
-    return (
-      <div className="text-center">
-        <h3 className="font-medium">{clientError}.</h3>
-        <Button variant="link" to="/join?resend">
-          Resend confirmation link
-        </Button>
-        <p>If the issue persists please get in touch with the Shelf</p>
-        team.{" "}
-      </div>
-    );
   return (
-    <div className="flex flex-col items-center text-center">
-      <Spinner />
-      <p className="mt-2">Attempting to login...</p>
+    <div className="flex justify-center text-center">
+      {data?.error ? (
+        <div>
+          {/* If there are validation errors, we map over those and show them */}
+          {validationErrors ? (
+            Object.values(validationErrors).map((error) => (
+              <div className="text-sm text-error-500" key={error.message}>
+                {error.message}
+              </div>
+            ))
+          ) : (
+            // If there are no validation errors, we show the error message returned by the catch in the action
+            <div className="text-sm text-error-500">{data.error.message}</div>
+          )}
+          <Button to="/" className="mt-4">
+            Back to login
+          </Button>
+        </div>
+      ) : (
+        <Spinner />
+      )}
     </div>
   );
 }

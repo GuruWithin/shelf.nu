@@ -1,28 +1,23 @@
-import type { LoaderFunctionArgs, LinksFunction } from "@remix-run/node";
-import WelcomeCarousel from "~/components/welcome/carousel";
-import { requireAuthSession } from "~/modules/auth";
-import carouselStyles from "~/styles/layout/carousel.css";
+import { redirect, type MetaFunction } from "@remix-run/node";
+import { ChoosePurpose } from "~/components/welcome/choose-purpose";
+import { appendToMetaTitle } from "~/utils/append-to-meta-title";
+import { ENABLE_PREMIUM_FEATURES } from "~/utils/env";
 
-export const links: LinksFunction = () => [
-  {
-    rel: "stylesheet",
-    href: "https://cdn.jsdelivr.net/npm/swiper@10/swiper-bundle.min.css",
-  },
-  {
-    rel: "stylesheet",
-    href: carouselStyles,
-  },
+export const meta: MetaFunction = () => [
+  { title: appendToMetaTitle("Welcome to shelf.nu") },
 ];
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await requireAuthSession(request);
+export function loader() {
+  if (!ENABLE_PREMIUM_FEATURES) {
+    return redirect("/assets");
+  }
   return null;
-};
+}
 
 export default function Welcome() {
   return (
     <div>
-      <WelcomeCarousel />
+      <ChoosePurpose />
     </div>
   );
 }

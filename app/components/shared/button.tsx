@@ -1,19 +1,26 @@
 import React from "react";
+import { ExternalLinkIcon } from "@radix-ui/react-icons";
 import { Link } from "@remix-run/react";
-import { tw } from "~/utils";
-import type { Icon } from "./icons-map";
-import iconsMap from "./icons-map";
-
+import { tw } from "~/utils/tw";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
+import type { IconType } from "./icons-map";
+import Icon from "../icons/icon";
 import type { ButtonVariant, ButtonWidth } from "../layout/header/types";
 
 export interface ButtonProps {
-  as?: React.ElementType;
+  as?: React.ComponentType<any> | string;
   className?: string;
   variant?: ButtonVariant;
   width?: ButtonWidth;
-  size?: "sm" | "md";
-  icon?: Icon;
-  disabled?: boolean;
+  size?: "xs" | "sm" | "md";
+  icon?: IconType;
+  /** Disabled can be a boolean  */
+  disabled?:
+    | boolean
+    | {
+        title?: string;
+        reason: React.ReactNode | string;
+      };
   attachToInput?: boolean;
   onlyIconOnMobile?: boolean;
   title?: string;
@@ -22,37 +29,33 @@ export interface ButtonProps {
 }
 
 export const Button = React.forwardRef<HTMLElement, ButtonProps>(
-  function Button(
-    {
+  function Button(props: ButtonProps, ref) {
+    let {
       as = "button",
-      className = "",
+      className,
       variant = "primary",
       width = "auto",
-      size = "md",
+      size = "sm",
       attachToInput = false,
       icon,
-      disabled = undefined,
+      disabled,
       children,
-      title,
       onlyIconOnMobile,
       error,
       hideErrorText = false,
-      ...props
-    }: ButtonProps,
-    ref
-  ) {
-    const Component = props?.to ? Link : as;
-
-    const baseButtonClasses = `inline-flex items-center justify-center rounded font-semibold text-center  gap-2  max-w-xl border text-sm box-shadow-xs`;
+      target,
+    } = props;
+    const Component: React.ComponentType<any> | string = props?.to ? Link : as;
+    const baseButtonClasses = `inline-flex  items-center justify-center rounded font-semibold text-center  gap-2  max-w-xl border text-sm box-shadow-xs`;
 
     const variants = {
       primary: tw(
-        `border-primary-400 bg-primary-500 text-white focus:ring-2 hover:bg-primary-400`,
-        disabled ? "border-primary-300 bg-primary-300" : ""
+        `border-primary-400 bg-primary-500 text-white  focus:ring-2`,
+        disabled ? "border-primary-300 bg-primary-300" : "hover:bg-primary-400"
       ),
       secondary: tw(
-        `border-gray-300 bg-white text-gray-700 hover:bg-gray-50`,
-        disabled ? "border-gray-200 text-gray-300" : ""
+        `border-gray-300 bg-white text-gray-700 `,
+        disabled ? "text-gray-500" : "hover:bg-gray-50"
       ),
       tertiary: tw(
         `border-b border-primary/10 pb-1 leading-none`,
@@ -60,6 +63,17 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(
       ),
       link: tw(
         `border-none p-0 text-text-sm font-semibold text-primary-700 hover:text-primary-800`
+      ),
+      "block-link": tw(
+        "-mt-1 border-none px-2 py-1 text-[14px] font-normal hover:bg-primary-50 hover:text-primary-600"
+      ),
+
+      "block-link-gray": tw(
+        "-mt-1 border-none px-2 py-1 text-[14px] font-normal hover:bg-gray-50 hover:text-gray-600"
+      ),
+      danger: tw(
+        `border-error-600 bg-error-600 text-white focus:ring-2`,
+        disabled ? "border-error-300 bg-error-300" : "hover:bg-error-800"
       ),
     };
 
@@ -74,7 +88,9 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(
       full: "w-full max-w-full",
     };
 
-    const disabledStyles = disabled ? "pointer-events-none " : undefined;
+    const disabledStyles = disabled
+      ? "opacity-50 cursor-not-allowed"
+      : undefined;
     const attachedStyles = attachToInput
       ? tw(" rounded-l-none border-l-0")
       : undefined;
@@ -92,19 +108,76 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(
         : ""
     );
 
+    const isDisabled =
+      disabled === undefined // If it is undefined, then it is not disabled
+        ? false
+        : typeof disabled === "boolean"
+        ? disabled
+        : true; // If it is an object, then it is disabled
+    const reason = typeof disabled === "object" ? disabled.reason : "";
+    const disabledTitle =
+      typeof disabled === "object" ? disabled.title : undefined;
+
+    const newTab = target === "_blank";
+
+    if (isDisabled) {
+      return (
+        <HoverCard openDelay={50} closeDelay={50}>
+          <HoverCardTrigger
+            className={tw("disabled  cursor-not-allowed ")}
+            asChild
+          >
+            <Component
+              {...props}
+              className={finalStyles}
+              onMouseDown={(e: React.MouseEvent<HTMLButtonElement>) => {
+                e.preventDefault();
+              }}
+              onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
+                e.preventDefault();
+              }}
+            >
+              {icon && <Icon icon={icon} />}{" "}
+              {children ? (
+                <span
+                  className={onlyIconOnMobile ? "hidden lg:inline-block" : ""}
+                >
+                  {children}
+                </span>
+              ) : null}
+            </Component>
+          </HoverCardTrigger>
+          {reason && (
+            <HoverCardContent side="left">
+              <h5 className="text-left text-[14px]">
+                {disabledTitle ? disabledTitle : "Action disabled"}
+              </h5>
+              <p className="text-left text-[14px]">{reason}</p>
+            </HoverCardContent>
+          )}
+        </HoverCard>
+      );
+    }
     return (
       <>
         <Component
+          {...props}
           className={finalStyles}
           prefetch={props.to ? (props.prefetch ? "intent" : "none") : "none"}
-          {...props}
-          title={title}
           ref={ref}
         >
-          {icon && iconsMap[icon]}{" "}
+          {icon && <Icon icon={icon} />}{" "}
           {children ? (
-            <span className={onlyIconOnMobile ? "hidden lg:inline-block" : ""}>
-              {children}
+            <span
+              className={tw(
+                newTab ? "inline-flex items-center gap-[2px]" : "",
+                onlyIconOnMobile ? "hidden lg:inline-block" : ""
+              )}
+            >
+              <span>{children}</span>{" "}
+              {newTab && (
+                <ExternalLinkIcon className="external-link-icon mt-px" />
+              )}
             </span>
           ) : null}
         </Component>

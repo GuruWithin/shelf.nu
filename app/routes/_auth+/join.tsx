@@ -1,48 +1,71 @@
-import * as React from "react";
 import type {
   LoaderFunctionArgs,
   ActionFunctionArgs,
   MetaFunction,
 } from "@remix-run/node";
 import { redirect, json } from "@remix-run/node";
-import {
-  Form,
-  useActionData,
-  useNavigation,
-  useSearchParams,
-} from "@remix-run/react";
-import { parseFormAny, useZorm } from "react-zorm";
+import { useActionData, useNavigation } from "@remix-run/react";
+
+import { useZorm } from "react-zorm";
 import { z } from "zod";
+import { Form } from "~/components/custom-form";
 
 import Input from "~/components/forms/input";
 import PasswordInput from "~/components/forms/password-input";
 import { Button } from "~/components/shared/button";
-import { getAuthSession, ContinueWithEmailForm } from "~/modules/auth";
+import { config } from "~/config/shelf.config";
+import { useSearchParams } from "~/hooks/search-params";
+import { ContinueWithEmailForm } from "~/modules/auth/components/continue-with-email-form";
 import { signUpWithEmailPass } from "~/modules/auth/service.server";
-import { getUserByEmail } from "~/modules/user";
-import { assertIsPost, isFormProcessing } from "~/utils";
+import { findUserByEmail } from "~/modules/user/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
+import { ShelfError, makeShelfError, notAllowedMethod } from "~/utils/error";
+import { isFormProcessing } from "~/utils/form";
+import { data, error, getActionMethod, parseData } from "~/utils/http.server";
+import { validEmail } from "~/utils/misc";
 
-export async function loader({ request }: LoaderFunctionArgs) {
-  const authSession = await getAuthSession(request);
-
+export function loader({ context }: LoaderFunctionArgs) {
   const title = "Create an account";
-
   const subHeading = "Start your journey with Shelf";
+  const { disableSignup } = config;
 
-  if (authSession) return redirect("/");
+  try {
+    if (disableSignup) {
+      throw new ShelfError({
+        cause: null,
+        title: "Signup is disabled",
+        message:
+          "For more information, please contact your workspace administrator.",
+        label: "User onboarding",
+        status: 403,
+        shouldBeCaptured: false,
+      });
+    }
+    if (context.isAuthenticated) {
+      return redirect("/assets");
+    }
 
-  return json({ title, subHeading });
+    return json(data({ title, subHeading }));
+  } catch (cause) {
+    const reason = makeShelfError(cause);
+    throw json(error(reason), { status: reason.status });
+  }
 }
 
 const JoinFormSchema = z
   .object({
     email: z
       .string()
-      .email("invalid-email")
-      .transform((email) => email.toLowerCase()),
-    password: z.string().min(8, "password-too-short"),
-    confirmPassword: z.string().min(8, "password-too-short"),
+      .transform((email) => email.toLowerCase())
+      .refine(validEmail, () => ({
+        message: "Please enter a valid email",
+      })),
+    password: z
+      .string()
+      .min(8, "Your password is too short. Min 8 characters are required."),
+    confirmPassword: z
+      .string()
+      .min(8, "Your password is too short. Min 8 characters are required."),
     redirectTo: z.string().optional(),
   })
   .superRefine(({ password, confirmPassword }, ctx) => {
@@ -56,61 +79,45 @@ const JoinFormSchema = z
   });
 
 export async function action({ request }: ActionFunctionArgs) {
-  assertIsPost(request);
-  const formData = await request.formData();
-  const result = await JoinFormSchema.safeParseAsync(parseFormAny(formData));
+  try {
+    const method = getActionMethod(request);
 
-  if (!result.success) {
-    return json(
-      {
-        errors: result.error,
-      },
-      { status: 400 }
-    );
+    switch (getActionMethod(request)) {
+      case "POST": {
+        const { email, password } = parseData(
+          await request.formData(),
+          JoinFormSchema
+        );
+
+        const existingUser = await findUserByEmail(email);
+
+        if (existingUser) {
+          throw new ShelfError({
+            cause: null,
+            message: "User with this Email already exits, login instead",
+            additionalData: {
+              email,
+            },
+            label: "User onboarding",
+            shouldBeCaptured: false,
+            status: 409,
+          });
+        }
+
+        // Sign up with the provided email and password
+        await signUpWithEmailPass(email, password);
+
+        return redirect(
+          `/otp?email=${encodeURIComponent(email)}&mode=confirm_signup`
+        );
+      }
+    }
+
+    throw notAllowedMethod(method);
+  } catch (cause) {
+    const reason = makeShelfError(cause);
+    return json(error(reason), { status: reason.status });
   }
-
-  const { email, password } = result.data;
-
-  const existingUser = await getUserByEmail(email);
-
-  if (existingUser) {
-    return json(
-      {
-        errors: {
-          email: "User with this Email already exits, login instead",
-          password: null,
-        },
-      },
-      { status: 400 }
-    );
-  }
-
-  // Sign up with the provided email and password
-  const signUpResult = await signUpWithEmailPass(email, password);
-
-  // Handle the results of the sign up
-  if (signUpResult.status === "error") {
-    return json(
-      { errors: { email: "unable-to-create-account", password: null } },
-      { status: 500 }
-    );
-  } else if (
-    signUpResult.user?.confirmation_sent_at ||
-    signUpResult.status === "Email verification_required"
-  ) {
-    // Redirect to the email verification page using Remix's redirect function
-    return redirect(`/verify-email?email=${encodeURIComponent(email)}`);
-  }
-
-  return json(
-    {
-      errors: {
-        email: "Somthing Went Wrong, refresh page and try to signup again ",
-        password: null,
-      },
-    },
-    { status: 500 }
-  );
 }
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => [
@@ -123,13 +130,11 @@ export default function Join() {
   const redirectTo = searchParams.get("redirectTo") ?? undefined;
   const navigation = useNavigation();
   const disabled = isFormProcessing(navigation.state);
-  const data = useActionData<{
-    errors: { email: string; password: string | null };
-  }>();
+  const data = useActionData<typeof action>();
 
   return (
     <div className="flex min-h-full flex-col justify-center">
-      <div className="mx-auto w-full max-w-md px-8">
+      <div className="mx-auto w-full max-w-md">
         <Form ref={zo.ref} method="post" className="space-y-6" replace>
           <div>
             <Input
@@ -143,7 +148,7 @@ export default function Join() {
               autoComplete="email"
               disabled={disabled}
               inputClassName="w-full"
-              error={zo.errors.email()?.message || data?.errors?.email}
+              error={zo.errors.email()?.message || data?.error.message}
             />
           </div>
 
@@ -192,12 +197,12 @@ export default function Join() {
             </div>
             <div className="relative flex justify-center text-sm">
               <span className="bg-white px-2 text-gray-500">
-                {"Or use a Magic Link"}
+                {"Or use a One Time Password"}
               </span>
             </div>
           </div>
           <div className="mt-6">
-            <ContinueWithEmailForm />
+            <ContinueWithEmailForm mode="signup" />
           </div>
         </div>
         <div className="flex items-center justify-center pt-5">

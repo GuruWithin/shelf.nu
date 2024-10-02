@@ -7,8 +7,9 @@ import {
   clearNotificationAtom,
   showNotificationAtom,
 } from "~/atoms/notifications";
-import { tw } from "~/utils";
+import { tw } from "~/utils/tw";
 import { iconsMap } from "./icons-map";
+import When from "../when/when";
 
 export const Toaster = () => {
   const [, clearNotification] = useAtom(clearNotificationAtom);
@@ -37,7 +38,7 @@ export const Toaster = () => {
     <Toast.Provider swipeDirection="right" duration={3000}>
       <Toast.Root
         className={tw(
-          "flex gap-4 rounded-lg border border-gray-100 bg-white p-3 shadow-xl",
+          "flex gap-4 rounded border border-gray-100 bg-white p-3 shadow-xl",
           "data-[swipe=cancel]:translate-x-0 data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[state=closed]:animate-hide data-[state=open]:animate-slideIn data-[swipe=end]:animate-swipeOut data-[swipe=cancel]:transition-[transform_200ms_ease-out]"
         )}
         open={open}
@@ -58,9 +59,12 @@ export const Toaster = () => {
           <Toast.Title className=" text-text-sm font-semibold text-gray-900 ">
             {title}
           </Toast.Title>
-          <Toast.Description className="text-gray-600">
-            {message}
-          </Toast.Description>
+
+          <When truthy={!!message}>
+            <Toast.Description className="text-gray-600">
+              {message}
+            </Toast.Description>
+          </When>
         </div>
 
         <Toast.Close

@@ -4,7 +4,7 @@ import type { loader } from "~/routes/_layout+/dashboard";
 import { EmptyState } from "./empty-state";
 import { AssetImage } from "../assets/asset-image";
 import { AssetStatusBadge } from "../assets/asset-status-badge";
-import { Badge } from "../shared";
+import { Badge } from "../shared/badge";
 import { InfoTooltip } from "../shared/info-tooltip";
 import { Td, Table, Tr } from "../table";
 
@@ -15,13 +15,13 @@ export default function NewestAssets() {
       <div className="border border-b-0 border-gray-200">
         <div className="flex items-center justify-between">
           <div className="flex-1 p-4 text-left text-[14px] font-semibold  text-gray-900 md:px-6">
-            Newest Assets
+            Newest assets
           </div>
           <div className=" p-4 text-right text-[14px] font-semibold  text-gray-900 md:px-6">
             <InfoTooltip
               content={
                 <>
-                  <h6>Newest Assets</h6>
+                  <h6>Newest assets</h6>
                   <p>Below listed assets were created recently</p>
                 </>
               }
@@ -109,7 +109,7 @@ const Row = ({
       </Td>
 
       {/* Category */}
-      <Td className="hidden md:table-cell">
+      <Td>
         {category ? (
           <Badge color={category.color} withDot={false}>
             {category.name}
